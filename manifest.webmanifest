@@ -1,7 +1,7 @@
 {
   "name": "RRH Analysis",
   "short_name": "RRH",
-  "description": "RR Helper 專員工作分析",
+  "description": "RRH Analysis",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
