@@ -1,0 +1,1004 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RRH Analysis</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#191919">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1f2340;--muted:#6b7089;--line:#e3e6ee;--accent:#3a6fe0;
+  --work:#3a6fe0;--case:#1f9d63;--outside:#e8590c;--idle:#a3a8b8;--other:#8e6bd8;--gap:#f3d3d3}
+/* 黑暗模式：背景 #191919；預設跟著系統，可用右上角按鈕切換（記在這台電腦的瀏覽器） */
+:root[data-theme="dark"]{--bg:#191919;--card:#232323;--ink:#e8e8e8;--muted:#9b9b9b;--line:#353535;--gap:#4a2a2a;color-scheme:dark}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#191919;--card:#232323;--ink:#e8e8e8;--muted:#9b9b9b;--line:#353535;--gap:#4a2a2a;color-scheme:dark}}
+:root[data-theme="light"]{color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 -apple-system,"Segoe UI","Microsoft JhengHei",sans-serif}
+header{padding:16px 20px;border-bottom:1px solid var(--line);background:var(--card)}
+h1{margin:0 0 10px;font-size:18px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+input,select,button{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:5px 8px}
+button{cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+main{padding:16px 20px;max-width:1280px;margin:0 auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:14px}
+.card h2{margin:0 0 10px;font-size:15px}
+.muted{color:var(--muted)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.stat{border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.stat b{display:block;font-size:18px}
+.chips label{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line);border-radius:14px;padding:2px 9px;cursor:pointer;user-select:none}
+.tabs{display:flex;gap:4px;margin-bottom:10px}
+.tabs button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{border-bottom:1px solid var(--line);padding:5px 8px;text-align:left;white-space:nowrap}
+th{position:sticky;top:0;background:var(--card);cursor:pointer}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+tr.gap td{background:var(--gap);color:var(--muted);font-style:italic}
+.badge{display:inline-block;border-radius:4px;padding:0 6px;color:#fff;font-size:12px}
+.tablewrap{max-height:560px;overflow:auto}
+.strip{position:relative;height:34px;border-radius:6px;background:var(--line);overflow:hidden;margin:4px 0 2px}
+.strip div{position:absolute;top:0;bottom:0}
+.axis{position:relative;height:16px;font-size:11px;color:var(--muted)}
+.axis span{position:absolute;transform:translateX(-50%)}
+.legend{display:flex;flex-wrap:wrap;gap:10px;font-size:12px;margin-top:6px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+.daylabel{font-size:12px;margin-top:10px}
+a{color:var(--accent)}
+#msg{margin-left:6px}
+.hide{display:none}
+.tabhide{display:none!important}
+.titlebar{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:12px}
+.titlebar h1{margin:0}
+.toptabs{display:flex;gap:4px;flex:1}
+.toptabs button{border:none;background:transparent;padding:6px 14px;border-radius:8px;color:var(--muted);font-weight:600}
+.toptabs button.on{background:var(--accent);color:#fff}
+#themeBtn{margin-left:auto}
+.empty{padding:40px 20px;text-align:center;color:var(--muted)}
+
+:root{--nr:#e2bcbc;--off:#d3d6de}
+:root[data-theme="dark"]{--nr:#6a4545;--off:#3d3d3d}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--nr:#6a4545;--off:#3d3d3d}}
+.srcbar{margin-top:8px}
+.lv{width:100%}
+.lv td{white-space:normal}
+.lv tr.l1 td{font-weight:600;border-top:1px solid var(--line);padding-top:8px}
+.lv tr.l2 td{padding-left:26px;color:var(--ink);font-size:13px}
+.lv tr.l2 td.num{color:var(--muted)}
+.lv tr.tot td{font-size:15px;border-top:2px solid var(--ink)}
+.lv i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px}
+.lvbar{display:flex;height:22px;border-radius:6px;overflow:hidden;background:var(--line);margin:8px 0 6px}
+.lvbar div{height:100%}
+.lv tr.off td{color:var(--muted);font-size:13px;border-top:1px dashed var(--line)}
+.lvnote{font-size:12px;margin:6px 0 0}
+.warn{color:var(--outside)}
+/* RWD */
+.toptabs{overflow-x:auto}
+.toptabs button{white-space:nowrap}
+@media (max-width:760px){
+  header{padding:12px}
+  main{padding:10px}
+  .card{padding:10px 12px}
+  .titlebar{gap:8px}
+  .row{gap:6px}
+  .row>label{flex:1 1 150px;display:flex;flex-direction:column;gap:2px}
+  .row>label.muted,.chips label{flex:0 0 auto;flex-direction:row}
+  .row input:not([type=checkbox]),.row select{width:100%;max-width:100%}
+  .row>button,.row>span{flex:0 0 auto}
+  table{font-size:12px}
+  .tablewrap{max-height:70vh}
+  .stats{grid-template-columns:repeat(2,1fr)}
+  .axis{font-size:10px}
+  .lv tr.l2 td{padding-left:16px}
+}
+@media (max-width:420px){ #themeBtn{margin-left:0} .toptabs{flex:1 1 100%;order:3} }
+</style>
+</head>
+<body>
+<header>
+  <div class="titlebar">
+    <h1>RRH Analysis</h1>
+    <div class="toptabs">
+      <button data-top="act" class="on">Productivity</button>
+      <button data-top="usage">Usage</button>
+    </div>
+    <button id="themeBtn" title="切換白天／黑暗模式"></button>
+  </div>
+  <div class="row" id="srcRow">
+    <label>資料來源 <select id="srcSel">
+      <option value="drive">Google Drive（.db 檔案）</option>
+      <option value="mypage">MyPage（排程上傳檔）</option>
+      <option value="firebase">Firebase（尚未收走的資料）</option>
+      <option value="local">本機檔案（.db／.json）</option>
+    </select></label>
+    <label id="daysWrap">載入最近 <select id="days"><option>1</option><option>3</option><option selected>7</option><option>14</option><option>30</option><option value="90">90</option></select> 天</label>
+    <span id="msg" class="muted"></span>
+  </div>
+  <div class="row srcbar hide" id="driveBar">
+    <input id="gClient" size="40" placeholder="OAuth Client ID（xxx.apps.googleusercontent.com）">
+    <input id="gFile" size="30" placeholder="檔案連結或 ID（留空＝依檔名搜尋）">
+    <button class="primary" id="gLoad">登入 Google 並載入</button>
+    <span id="gWho" class="muted"></span>
+  </div>
+  <div class="row srcbar hide" id="mpBar">
+    <span class="muted">資料更新時間：<span id="mpGen">-</span></span>
+    <button class="primary" id="mpReload">載入</button>
+  </div>
+  <div class="row srcbar hide" id="fbBar">
+    <input id="dbUrl" size="44" value="https://rr-dynamic-data-default-rtdb.firebaseio.com">
+    <input id="secret" type="password" size="28" placeholder="資料庫密鑰（Database secret）">
+    <label class="muted"><input type="checkbox" id="remember"> 記住密鑰</label>
+    <button class="primary" id="loadBtn">讀取 Firebase</button>
+  </div>
+  <div class="row srcbar hide" id="localBar">
+    <label>選擇 rrh_activity.db 或匯出的 JSON <input type="file" id="fileInput" accept=".db,.sqlite,.sqlite3,.json"></label>
+  </div>
+</header>
+
+<div id="actEmpty" class="empty">還沒有工作紀錄資料</div>
+<main id="app" class="hide">
+  <div class="card">
+    <div class="row">
+      <label>專員 <select id="fAgent"></select></label>
+      <label>裝置 <select id="fDev"></select></label>
+      <label>日期 <select id="fDate"></select></label>
+      <label>RID <input id="fRid" size="18" placeholder="輸入部分即可"></label>
+      <label>網域／文件 <input id="fHost" size="18" placeholder="例如 youtube、表單名稱"></label>
+      <label>時間 <input id="fFrom" type="time"> ～ <input id="fTo" type="time"></label>
+      <label class="muted"><input type="checkbox" id="fMerge" checked> 合併相鄰相同片段</label>
+      <label class="muted">中途離開單次上限 <input id="fAskMax" type="number" min="1" value="10" style="width:56px"> 分鐘</label>
+      <label class="muted">連續閒置 ≥ <input id="fOffH" type="number" min="0" step="0.5" value="3" style="width:56px"> 小時視為未上班（0＝關閉）</label>
+      <button id="csvBtn">匯出 CSV</button>
+    </div>
+    <div class="row chips" id="fStates" style="margin-top:8px"></div>
+    <div class="row chips" id="fCats" style="margin-top:6px"></div>
+  </div>
+
+  <div class="card">
+    <h2>總覽</h2>
+    <div id="levels"></div>
+    <div class="stats" id="stats" style="margin-top:12px"></div>
+  </div>
+
+  <div class="card">
+    <h2>上下班紀錄</h2>
+    <p class="muted" id="shiftNote"></p>
+    <div class="tablewrap" id="shift" style="max-height:none"></div>
+  </div>
+
+  <div class="card">
+    <h2>時間軸</h2>
+    <div id="strips"></div>
+    <div class="legend" id="legend"></div>
+  </div>
+
+  <div class="card">
+    <div class="tabs">
+      <button data-tab="detail" class="on">片段明細</button>
+      <button data-tab="cases">案件彙整</button>
+      <button data-tab="cats">系統分布</button>
+      <button data-tab="agents">專員比較</button>
+    </div>
+    <div id="tabDetail" class="tablewrap"></div>
+    <div id="tabCases" class="tablewrap hide"></div>
+    <div id="tabCats" class="tablewrap hide"></div>
+    <div id="tabAgents" class="tablewrap hide"></div>
+  </div>
+</main>
+
+<div id="usageEmpty" class="empty tabhide">還沒有 RR Helper 使用資料</div>
+<main id="usageApp" class="hide">
+  <div class="card">
+    <h2>RR Helper 功能使用</h2>
+    <div class="row">
+      <label>日期 <select id="uFrom"></select></label> ～ <select id="uTo"></select>
+      <label>專員 <select id="uAgent"></select></label>
+      <span class="muted" id="uInfo"></span>
+    </div>
+  </div>
+  <div class="card">
+    <h2>專員點擊</h2>
+    <p class="muted" id="uToolbarNote"></p>
+    <div class="tablewrap" id="uClicks"></div>
+  </div>
+  <div class="card">
+    <h2>自動功能結果</h2>
+    <p class="muted">失敗率＝結果不是「成功／無異常／有異常／登入完成」的比例。點功能名稱可以看每位專員的狀況。</p>
+    <div class="tablewrap" id="uAuto"></div>
+    <div id="uAutoAgents" style="margin-top:12px"></div>
+  </div>
+  <div class="card">
+    <h2>自動顯示</h2>
+    <div class="tablewrap" id="uShows"></div>
+  </div>
+</main>
+
+<script>
+const STATE = { work: "工作中", outside: "Chrome 外", idle: "閒置" };
+const CAT = {
+  dms_case: "DMS 案件頁", dms_other: "DMS 其他頁", ih: "IH", bi: "BI", mypage: "MyPage",
+  g_sheet: "Google 試算表", g_form: "Google 表單", g_slides: "Google 簡報", g_doc: "Google 文件", other: "其他網站",
+};
+const COLOR = {
+  dms_case: "var(--case)", dms_other: "#5aa9e6", ih: "#d6336c", bi: "#f59f00", mypage: "#868e96",
+  g_sheet: "#0b7285", g_form: "#7048e8", g_slides: "#e67700", g_doc: "#1971c2", other: "var(--other)",
+  outside: "var(--outside)", idle: "var(--idle)", off: "var(--off)",
+};
+const EXTERNAL = new Set(["dms_other", "ih", "bi", "mypage", "g_sheet", "g_form", "g_slides", "g_doc"]);
+const $ = (id) => document.getElementById(id);
+let ALL = [];          // 所有片段
+let view = [];         // 篩選後
+let sortKey = null, sortDir = 1;
+
+// ---------- 讀取 ----------
+try {
+  const saved = localStorage.getItem("actViewerSecret");
+  if (saved) { $("secret").value = saved; $("remember").checked = true; }
+  const url = localStorage.getItem("actViewerDb"); if (url) $("dbUrl").value = url;
+} catch (_) {}
+
+$("loadBtn").onclick = async () => {
+  const base = $("dbUrl").value.trim().replace(/\/+$/, "");
+  const secret = $("secret").value.trim();
+  try {
+    if ($("remember").checked) localStorage.setItem("actViewerSecret", secret); else localStorage.removeItem("actViewerSecret");
+    localStorage.setItem("actViewerDb", base);
+  } catch (_) {}
+  setMsg("讀取中…");
+  try {
+    const res = await fetch(`${base}/activity_inbox.json` + (secret ? `?auth=${encodeURIComponent(secret)}` : ""));
+    const text = await res.text();
+    if (!res.ok) throw new Error(`HTTP ${res.status}：${text.slice(0, 120)}`);
+    ingest(JSON.parse(text));
+    try {   // 功能使用統計（另一個收件匣）
+      const r2 = await fetch(`${base}/usage_inbox.json` + (secret ? `?auth=${encodeURIComponent(secret)}` : ""));
+      if (r2.ok) ingestUsage(JSON.parse(await r2.text()));
+    } catch (_) {}
+  } catch (e) { setMsg("讀取失敗：" + e.message); }
+};
+
+$("fileInput").onchange = async (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    if (/\.(db|sqlite3?)$/i.test(f.name)) { setMsg("讀取資料庫…"); await loadDbBuffer(await f.arrayBuffer(), 0); return; }
+    const data = JSON.parse(await f.text());
+    ingest(data.activity_inbox || (data.usage_inbox ? {} : data));   // 可匯入整個資料庫或只匯出 activity_inbox
+    if (data.usage_inbox) ingestUsage(data.usage_inbox);
+  } catch (err) { setMsg("檔案格式錯誤：" + err.message); }
+};
+
+function setMsg(t) { $("msg").textContent = t; }
+
+const toMs = (s) => Date.parse(String(s).replace(" ", "T") + "+08:00");
+const anyMs = (v) => typeof v === "number" ? (v < 1e12 ? v * 1000 : v)
+  : /(Z|[+-]\d\d:?\d\d)$/i.test(String(v).trim()) ? Date.parse(String(v).replace(" ", "T")) : toMs(v);
+const fmtDate = (ms) => new Date(ms).toLocaleDateString("sv-SE", { timeZone: "Asia/Taipei" });
+
+function ingest(data) {   // Firebase／JSON：一批一批的格式
+  const rows = []; let batches = 0, skipped = 0;
+  for (const [bid, b] of Object.entries(data || {})) {
+    if (!b || !b.segs) { skipped++; continue; }
+    batches++;
+    const segs = Array.isArray(b.segs) ? b.segs : Object.values(b.segs);
+    for (const x of segs) {
+      if (!x || !x.s || !x.e || !x.st) { skipped++; continue; }
+      rows.push({ ...x, batch: bid, ver: b.version || "" });
+    }
+  }
+  loadSegs(rows, `已讀取 ${batches} 批`, skipped);
+}
+
+function loadSegs(rows, label, skipped = 0) {
+  ALL = [];
+  for (const x of rows) {
+    const s = anyMs(x.s), e = anyMs(x.e);
+    if (!isFinite(s) || !isFinite(e) || !x.st) { skipped++; continue; }
+    ALL.push({ em: x.em || "(未知)", st: x.st, cat: x.cat || null, rid: x.rid || null, host: x.host || null, doc: x.doc || null, gid: x.gid || null, title: x.title || null,
+      dev: x.dev || "(未記錄)", tabs: x.tabs ?? null, s, e, sec: Math.round((e - s) / 1000), date: fmtDate(s), batch: x.batch || "", ver: x.ver || "" });
+  }
+  ALL.sort((a, b) => a.em.localeCompare(b.em) || a.s - b.s);
+  setMsg(`${label}、${ALL.length} 個片段` + (skipped ? `（略過 ${skipped} 筆格式不完整的資料）` : ""));
+  if (!ALL.length) { $("app").classList.add("hide"); return; }
+  buildFilters();
+  $("app").classList.remove("hide");
+  render();
+}
+
+// ---------- 篩選 ----------
+function buildFilters() {
+  const agents = [...new Set(ALL.map((x) => x.em))].sort();
+  $("fAgent").innerHTML = agents.map((a) => `<option>${esc(a)}</option>`).join("");
+  fillDates();
+  $("fStates").innerHTML = "<span class='muted'>狀態</span>" + Object.entries(STATE)
+    .map(([k, v]) => `<label><input type="checkbox" value="${k}" checked> ${v}</label>`).join("");
+  $("fCats").innerHTML = "<span class='muted'>系統</span>" + Object.entries(CAT)
+    .map(([k, v]) => `<label><input type="checkbox" value="${k}" checked> ${v}</label>`).join("");
+  for (const id of ["fDate", "fRid", "fHost", "fFrom", "fTo", "fMerge", "fAskMax", "fOffH"]) $(id).oninput = render;
+  $("fAgent").onchange = () => { fillDates(); render(); };
+  $("fDev").onchange = render;
+  $("fStates").onchange = render; $("fCats").onchange = render;
+}
+
+function fillDates() {
+  const em = $("fAgent").value;
+  const devs = [...new Set(ALL.filter((x) => x.em === em).map((x) => x.dev))].sort();
+  $("fDev").innerHTML = `<option value="">全部裝置（${devs.length} 台）</option>` + devs.map((d) => `<option>${esc(d)}</option>`).join("");
+  const dates = [...new Set(ALL.filter((x) => x.em === em).map((x) => x.date))].sort().reverse();
+  $("fDate").innerHTML = `<option value="">全部日期</option>` + dates.map((d) => `<option>${d}</option>`).join("");
+  if (dates.length) $("fDate").value = dates[0];
+}
+
+function checked(id) { return new Set([...$(id).querySelectorAll("input:checked")].map((i) => i.value)); }
+
+function applyFilters() {
+  const em = $("fAgent").value, date = $("fDate").value, rid = $("fRid").value.trim(), host = $("fHost").value.trim().toLowerCase();
+  const states = checked("fStates"), cats = checked("fCats");
+  const from = $("fFrom").value, to = $("fTo").value;
+  const dev = $("fDev").value;
+  let rows = ALL.filter((x) => x.em === em && (!date || x.date === date) && (!dev || x.dev === dev));
+  if ($("fMerge").checked) rows = mergeAdjacent(rows);
+  // 案件彙整用全部片段（不受狀態／系統勾選影響），明細才套用勾選
+  const base = rows.filter((x) => inTime(x, from, to));
+  const shown = base.filter((x) => states.has(x.st) && (x.st !== "work" || cats.has(x.cat || "other"))
+    && (!rid || (x.rid || "").includes(rid)) && (!host || (x.host || "").includes(host) || (x.title || "").toLowerCase().includes(host) || (x.doc || "").toLowerCase().includes(host)));
+  return { base, shown };
+}
+
+function inTime(x, from, to) {
+  const hm = fmtTime(x.s).slice(0, 5), hmEnd = fmtTime(x.e).slice(0, 5);
+  return (!from || hmEnd >= from) && (!to || hm <= to);
+}
+
+function mergeAdjacent(rows) {
+  const out = [];
+  for (const x of rows) {
+    const last = out.at(-1);
+    if (last && last.st === x.st && !last.off === !x.off && last.cat === x.cat && last.rid === x.rid && last.host === x.host && last.doc === x.doc && last.gid === x.gid && last.dev === x.dev && Math.abs(x.s - last.e) <= 2000) {
+      last.e = x.e; last.sec = Math.round((last.e - last.s) / 1000);
+    } else out.push({ ...x });
+  }
+  return out;
+}
+
+// ---------- 畫面 ----------
+/** 連續閒置（片段間隔 ≤ 5 分鐘）達門檻 → 視為未上班：標記 off，並記下起訖點（起點＝下班、終點＝上班） */
+let OFFRUNS = [];
+function markOff() {
+  const h = Number($("fOffH").value);
+  OFFRUNS = []; for (const x of ALL) x.off = false;
+  if (!(h > 0)) return;
+  const lim = h * 3600e3, tol = 5 * 60e3, groups = new Map();
+  for (const x of ALL) { const k = x.em + "|" + x.dev; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(x); }
+  for (const arr of groups.values()) {
+    let run = [];
+    const flush = () => {
+      if (run.length) {
+        const s = run[0].s, e = Math.max(...run.map((x) => x.e));
+        if (e - s >= lim) { run.forEach((x) => (x.off = true)); OFFRUNS.push({ em: run[0].em, dev: run[0].dev, s, e }); }
+        run = [];
+      }
+    };
+    for (const x of arr) {
+      if (x.st === "idle") { if (run.length && x.s - run.at(-1).e > tol) flush(); run.push(x); } else flush();
+    }
+    flush();
+  }
+}
+
+/** 每天：上班＝第一筆非「未上班」紀錄的開始，下班＝最後一筆的結束；若緊接著是長時間閒置就標示出來 */
+function renderShift() {
+  const em = $("fAgent").value, dev = $("fDev").value;
+  const rows = ALL.filter((x) => x.em === em && (!dev || x.dev === dev) && !x.off);
+  const byDate = {};
+  for (const x of rows) (byDate[x.date] ||= []).push(x);
+  const hm = (ms) => fmtTime(ms).slice(0, 5);
+  const body = Object.keys(byDate).sort().reverse().map((d) => {
+    const r = byDate[d], on = Math.min(...r.map((x) => x.s)), off = Math.max(...r.map((x) => x.e));
+    const run = OFFRUNS.find((o) => o.em === em && (!dev || o.dev === dev) && Math.abs(o.s - off) <= 10 * 60e3);
+    const next = run ? `${fmtDate(run.e) === d ? "" : fmtDate(run.e).slice(5) + " "}${hm(run.e)}` : "";
+    return `<tr><td>${d}</td><td class="num">${hm(on)}</td><td class="num">${hm(off)}</td><td class="num">${dur((off - on) / 1000)}</td>
+      <td class="muted">${run ? `連續閒置 ${durZh((run.e - run.s) / 1000)}（${hm(run.s)}～${next}）` : "最後活動後沒有長時間閒置（可能已關機或關閉 Chrome）"}</td></tr>`;
+  }).join("");
+  $("shiftNote").textContent = OFFRUNS.length || body ? `連續閒置達門檻的時段，起點記為下班、終點記為上班，並從閒置時間扣除（改列「未上班」）。目前條件：${Number($("fOffH").value) > 0 ? "≥ " + $("fOffH").value + " 小時" : "已關閉"}。` : "";
+  $("shift").innerHTML = table(["日期", "上班", "下班", "在線區間", "下班後狀況"], null, body || "<tr><td colspan='5' class='muted'>沒有資料</td></tr>");
+}
+
+function render() {
+  markOff();
+  renderShift();
+  const { base, shown } = applyFilters();
+  view = shown;
+  renderStats(base);
+  renderStrips(base);
+  renderDetail(shown);
+  renderCases(base);
+  renderCats(base);
+  renderAgents();
+}
+
+const durZh = (sec) => {
+  sec = Math.round(sec);
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60, p = (n) => String(n).padStart(2, "0");
+  return h ? `${h} 小時 ${p(m)} 分 ${p(s)} 秒` : `${m} 分 ${p(s)} 秒`;
+};
+const INTERNAL = ["dms_other", "ih", "bi", "mypage"];
+
+/** L1：工作中／Chrome 外／閒置／沒有紀錄；L2：各 L1 的細項。沒有紀錄＝（每天首尾之間的時間）－（片段涵蓋的時間） */
+function levelStats(rows) {
+  const v = { work: 0, outside: 0, idle: 0, off: 0, gap: 0, span: 0, w: { case: 0, int: 0, gdoc: 0, other: 0 }, i: { page: 0, away: 0 } };
+  const byDate = {};
+  for (const x of rows) (byDate[x.date] ||= []).push(x);
+  for (const r of Object.values(byDate)) {
+    r.sort((a, b) => a.s - b.s);
+    let cov = 0, cs = r[0].s, ce = r[0].e;
+    for (const x of r.slice(1)) { if (x.s > ce) { cov += ce - cs; cs = x.s; ce = x.e; } else ce = Math.max(ce, x.e); }
+    cov += ce - cs;
+    v.span += (ce - r[0].s) / 1000; v.gap += (ce - r[0].s - cov) / 1000;
+    for (const x of r) {
+      const d = (x.e - x.s) / 1000;
+      if (x.st === "work") {
+        v.work += d; const c = x.cat || "other";
+        if (c === "dms_case") v.w.case += d; else if (INTERNAL.includes(c)) v.w.int += d; else if (c.startsWith("g_")) v.w.gdoc += d; else v.w.other += d;
+      } else if (x.st === "outside") v.outside += d;
+      else if (x.st === "idle" && x.off) v.off += d;
+      else if (x.st === "idle") { v.idle += d; if (x.cat && x.cat !== "other") v.i.page += d; else v.i.away += d; }
+    }
+  }
+  return v;
+}
+
+function renderLevels(rows) {
+  if (!rows.length) { $("levels").innerHTML = "<span class='muted'>沒有資料</span>"; return; }
+  const v = levelStats(rows), T = v.span - v.off;
+  const pct = (a, b) => (b > 0 ? ((a / b) * 100).toFixed(1) + "%" : "-");
+  const L = [
+    ["work", "工作中", v.work, "var(--work)", [["DMS 案件頁", v.w.case], ["內部與查詢系統（IH、BI、MyPage、DMS 其他頁）", v.w.int], ["Google 文件", v.w.gdoc], ["其他網站", v.w.other]]],
+    ["outside", "Chrome 外", v.outside, "var(--outside)", []],
+    ["idle", "閒置", v.idle, "var(--idle)", [["停在工作頁面閱讀", v.i.page], ["離開座位／電腦鎖定（含停在其他網站）", v.i.away]]],
+    ["gap", "沒有紀錄（電腦睡眠／關閉 Chrome）", v.gap, "var(--nr)", []],
+  ];
+  const dates = new Set(rows.map((x) => x.date));
+  const on = rows.filter((x) => !x.off);
+  const range = !on.length ? "" : dates.size === 1 ? `${fmtTime(Math.min(...on.map((x) => x.s))).slice(0, 5)}～${fmtTime(Math.max(...on.map((x) => x.e))).slice(0, 5)}` : `${dates.size} 天合計`;
+  const sum = v.work + v.outside + v.idle + v.gap, diff = sum - T;
+  const bar = L.map(([, n, s, c]) => `<div title="${n} ${durZh(s)}" style="width:${T > 0 ? (s / T) * 100 : 0}%;background:${c}"></div>`).join("");
+  const body = L.map(([, n, s, c, kids]) => `<tr class="l1"><td><i style="background:${c}"></i>${n}</td><td class="num">${durZh(s)}</td><td class="num">${pct(s, T)}</td></tr>` +
+    kids.map(([kn, ks]) => `<tr class="l2"><td>其中 ${kn}</td><td class="num">${durZh(ks)}</td><td class="num">${pct(ks, s)}</td></tr>`).join("")).join("");
+  $("levels").innerHTML = `<div class="lvbar">${bar}</div><div class="tablewrap" style="max-height:none"><table class="lv"><thead><tr><th>項目</th><th class="num">時間</th><th class="num">占比</th></tr></thead><tbody>${body}
+    <tr class="tot"><td><b>總經過時間</b> <span class="muted">${range}</span></td><td class="num"><b>${durZh(T)}</b></td><td class="num">100%</td></tr>${v.off > 0 ? `<tr class="off"><td>未上班（連續閒置 ≥ ${$("fOffH").value} 小時，已從上方扣除）</td><td class="num">${durZh(v.off)}</td><td></td></tr>` : ""}</tbody></table></div>` +
+    (Math.abs(diff) <= 1 ? `<p class="lvnote muted">✓ 四個主狀態相加＝總經過時間（已扣除未上班）。L1 的占比＝占總經過時間；L2 的占比＝占所屬主狀態。</p>`
+      : `<p class="lvnote warn">⚠ 四項相加比總經過時間${diff > 0 ? "多" : "少"} ${durZh(Math.abs(diff))}，可能是多台裝置的時間重疊，請在上方「裝置」選單選單一裝置。</p>`);
+}
+
+function renderStats(rows) {
+  renderLevels(rows);
+  const rids = new Set(rows.filter((x) => x.rid && x.st === "work").map((x) => x.rid)).size;
+  const devCount = new Set(rows.map((x) => x.dev)).size;
+  const maxTabs = Math.max(0, ...rows.map((x) => x.tabs || 0));
+  $("stats").innerHTML = [
+    ["處理過的案件數", rids], ["最多同時開啟案件頁", maxTabs], ["裝置數", devCount],
+  ].map(([k, v]) => `<div class="stat"><span class="muted">${k}</span><b>${v}</b></div>`).join("");
+}
+
+function colorOf(x) { if (x.off) return "var(--off)"; return x.st === "work" ? COLOR[x.cat || "other"] : COLOR[x.st]; }
+function labelOf(x) {
+  if (x.off) return "未上班（連續閒置）";
+  if (x.st === "work") return CAT[x.cat] || x.cat || "其他網站";
+  if (x.st === "idle" && x.cat) return `閒置（停在${CAT[x.cat] || x.cat}）`;
+  return STATE[x.st];
+}
+
+function renderStrips(rows) {
+  rows = rows.filter((x) => !x.off);   // 未上班的長時間閒置不畫，避免時間軸被拉到隔天
+  const byDate = {};
+  for (const x of rows) (byDate[x.date] ||= []).push(x);
+  const html = [];
+  for (const d of Object.keys(byDate).sort().reverse()) {
+    const r = byDate[d];
+    const startH = Math.floor(new Date(r[0].s + 8 * 3600e3).getUTCHours());
+    const endH = Math.min(24, Math.ceil((r.at(-1).e - toMs(d + " 00:00:00")) / 3600e3));
+    const t0 = toMs(d + " 00:00:00") + startH * 3600e3, t1 = toMs(d + " 00:00:00") + Math.max(endH, startH + 1) * 3600e3;
+    const pct = (t) => ((t - t0) / (t1 - t0)) * 100;
+    const blocks = r.map((x) => `<div title="${fmtTime(x.s)}～${fmtTime(x.e)}　${esc(labelOf(x))}${x.rid ? " " + x.rid : ""}${x.host ? " " + esc(x.host) : ""}（${dur(x.sec)}）" style="left:${pct(x.s)}%;width:${Math.max(0.15, pct(x.e) - pct(x.s))}%;background:${colorOf(x)}"></div>`).join("");
+    let ticks = "";
+    for (let h = startH; h <= Math.max(endH, startH + 1); h++) ticks += `<span style="left:${pct(t0 + (h - startH) * 3600e3)}%">${h}:00</span>`;
+    html.push(`<div class="daylabel muted">${d}</div><div class="strip">${blocks}</div><div class="axis">${ticks}</div>`);
+  }
+  $("strips").innerHTML = html.join("") || "<span class='muted'>沒有資料</span>";
+  const used = new Set(rows.map((x) => (x.st === "work" ? x.cat || "other" : x.st)));
+  $("legend").innerHTML = [...used].map((k) => `<span><i style="background:${COLOR[k]}"></i>${CAT[k] || STATE[k]}</span>`).join("");
+}
+
+function renderDetail(rows) {
+  const out = [];
+  let prev = null;
+  for (const x of sortRows(rows)) {
+    if (!sortKey && prev && x.s - prev.e > 60000) out.push(`<tr class="gap"><td colspan="9">${fmtTime(prev.e)}～${fmtTime(x.s)} 沒有紀錄（${dur((x.s - prev.e) / 1000)}）</td></tr>`);
+    out.push(`<tr><td>${fmtTime(x.s)}</td><td>${fmtTime(x.e)}</td><td class="num">${dur(x.sec)}</td>
+      <td><span class="badge" style="background:${colorOf(x)}">${esc(labelOf(x))}</span></td>
+      <td>${x.rid ? `<a href="https://dms.cs.shopee.tw/dispute/detail/${x.rid}" target="_blank">${x.rid}</a>` : ""}</td>
+      <td>${x.doc ? docLink(x) : esc(x.host || "")}</td>
+      <td class="num">${x.tabs ?? ""}</td><td class="muted">${esc(x.dev)}</td><td class="muted">${esc(x.ver)}</td></tr>`);
+    prev = x;
+  }
+  $("tabDetail").innerHTML = table(["開始", "結束", "時長", "狀態／系統", "RID", "網域／文件", "開啟案件頁數", "裝置", "版本"],
+    ["s", "e", "sec", "label", "rid", "host", "tabs", "dev", "ver"], out.join(""));
+  bindSort("tabDetail", () => renderDetail(view));
+}
+
+function sortRows(rows) {
+  if (!sortKey) return rows;
+  const get = (x) => (sortKey === "label" ? labelOf(x) : x[sortKey] ?? "");
+  return [...rows].sort((a, b) => (get(a) > get(b) ? 1 : get(a) < get(b) ? -1 : 0) * sortDir);
+}
+
+/** 案件彙整：A → 外部 → 回到 A 的外部時間算給 A */
+function caseSummary(rows) {
+  const m = new Map();
+  const get = (rid) => m.get(rid) || (m.set(rid, { rid, dms: 0, visits: 0, ext: 0, outside: 0, askOver: 0, other: 0, idle: 0, first: Infinity, last: 0 }), m.get(rid));
+  const askMax = (Number($("fAskMax").value) || 10) * 60;   // 單次離開到 Chrome 外超過這個秒數，不算詢問時間
+  let lastRid = null, pending = [];
+  for (const x of rows) {
+    if (x.st === "idle" && !x.off && x.cat === "dms_case" && x.rid) { get(x.rid).idle += x.sec; continue; }   // 停在案件頁沒動作，另計
+    if (x.st === "work" && x.cat === "dms_case" && x.rid) {
+      const c = get(x.rid);
+      if (lastRid === x.rid) {
+        for (const p of pending) {
+          if (p.st === "outside") { if (p.sec <= askMax) c.outside += p.sec; else c.askOver += p.sec; }
+          else if (p.st === "work" && EXTERNAL.has(p.cat)) c.ext += p.sec;
+          else if (p.st === "work") c.other += p.sec;
+        }
+      }
+      if (lastRid !== x.rid || pending.length) c.visits++;
+      c.dms += x.sec; c.first = Math.min(c.first, x.s); c.last = Math.max(c.last, x.e);
+      lastRid = x.rid; pending = [];
+    } else {
+      pending.push(x);
+    }
+  }
+  return [...m.values()].sort((a, b) => b.dms - a.dms);
+}
+
+function renderCases(rows) {
+  const list = caseSummary(rows);
+  const body = list.map((c) => `<tr><td><a href="https://dms.cs.shopee.tw/dispute/detail/${c.rid}" target="_blank">${c.rid}</a></td>
+    <td class="num">${dur(c.dms)}</td><td class="num">${c.visits}</td><td class="num">${dur(c.ext)}</td>
+    <td class="num">${dur(c.outside)}</td><td class="num muted">${c.askOver ? dur(c.askOver) : ""}</td><td class="num">${dur(c.other)}</td><td class="num">${dur(c.idle)}</td>
+    <td class="num"><b>${dur(c.dms + c.ext)}</b></td><td class="num"><b>${dur(c.dms + c.ext + c.outside)}</b></td>
+    <td>${fmtTime(c.first).slice(0, 5)}</td><td>${fmtTime(c.last).slice(0, 5)}</td></tr>`).join("");
+  $("tabCases").innerHTML = `<p class="muted">外部查詢、中途離開、其他網站：離開案件後又回到同一件案件，中間的時間才算給該案件。中途離開＝這段期間在 Chrome 外（可能是 SeaTalk 詢問，也可能是其他事），單次超過上限的另列「超過上限」。<br>合計（下限）＝DMS 處理＋外部查詢，是確定花在這件案件的時間；合計（上限）＝再加上中途離開，是最多可能花的時間。停在案件頁沒有動作的時間另列「閒置停留」。</p>` +
+    table(["RID", "DMS 處理", "進入次數", "外部查詢", "中途離開", "超過上限", "其他網站", "閒置停留", "合計（下限）", "合計（上限）", "首次", "最後"], null, body || "<tr><td colspan='12' class='muted'>沒有案件頁紀錄</td></tr>");
+}
+
+/** 專員比較：同一天（或全部日期）所有專員並列，偏離中位數很多的格子標色 */
+function renderAgents() {
+  const date = $("fDate").value;
+  const merge = $("fMerge").checked;
+  const agents = [...new Set(ALL.map((x) => x.em))].sort();
+  const stats = agents.map((em) => {
+    let rows = ALL.filter((x) => x.em === em && (!date || x.date === date));
+    if (merge) rows = mergeAdjacent(rows);
+    const sum = (f) => rows.filter(f).reduce((a, x) => a + x.sec, 0);
+    const cases = caseSummary(rows);
+    const lows = cases.map((c) => c.dms + c.ext), highs = cases.map((c) => c.dms + c.ext + c.outside);
+    return {
+      em, n: cases.length,
+      dms: sum((x) => x.st === "work" && x.cat === "dms_case"),
+      low: median(lows), high: median(highs),
+      outside: sum((x) => x.st === "outside"),
+      idle: sum((x) => x.st === "idle" && !x.off),
+      other: sum((x) => x.st === "work" && x.cat === "other"),
+      work: sum((x) => x.st === "work"),
+    };
+  }).filter((a) => a.work + a.outside + a.idle > 0);
+  const cols = [
+    ["n", "處理案件數", (v) => v, "low"],
+    ["dms", "DMS 案件頁時間", dur, null],
+    ["low", "每件中位數（下限）", dur, "high"],
+    ["high", "每件中位數（上限）", dur, "high"],
+    ["outside", "Chrome 外", dur, "high"],
+    ["idle", "閒置", dur, "high"],
+    ["other", "其他網站", dur, "high"],
+  ];
+  const med = Object.fromEntries(cols.map(([k]) => [k, median(stats.map((a) => a[k]).filter((v) => v > 0))]));
+  const flag = (k, v, dir) => {
+    if (!dir || !med[k] || stats.length < 3) return "";
+    if (dir === "high" && v >= med[k] * 1.5) return " style=\"background:rgba(216,24,24,.12);font-weight:600\"";
+    if (dir === "low" && v <= med[k] * 0.5) return " style=\"background:rgba(216,24,24,.12);font-weight:600\"";
+    return "";
+  };
+  const body = stats.map((a) => `<tr><td>${esc(a.em)}</td>` + cols.map(([k, , f, dir]) => `<td class="num"${flag(k, a[k], dir)}>${f(a[k])}</td>`).join("") + "</tr>").join("");
+  const medRow = `<tr><td class="muted">中位數</td>` + cols.map(([k, , f]) => `<td class="num muted">${med[k] ? f(med[k]) : "-"}</td>`).join("") + "</tr>";
+  $("tabAgents").innerHTML = `<p class="muted">日期：${date || "全部"}（跟著上方日期篩選，不受專員、裝置篩選影響）。偏離所有人中位數很多的格子會標紅：案件數低於一半，或時間高於 1.5 倍；至少 3 位專員才標。</p>` +
+    table(["專員"].concat(cols.map((c) => c[1])), null, (body || "<tr><td colspan='8' class='muted'>沒有資料</td></tr>") + (stats.length ? medRow : ""));
+}
+
+const DOC_PATH = { g_sheet: "spreadsheets", g_form: "forms", g_slides: "presentation", g_doc: "document" };
+function docUrl(x) {
+  if (!x.doc) return "";
+  if (x.cat === "g_form" && x.doc.startsWith("1FAIpQL")) return `https://docs.google.com/forms/d/e/${x.doc}/viewform`;
+  return `https://docs.google.com/${DOC_PATH[x.cat] || "document"}/d/${x.doc}/edit` + (x.gid ? `#gid=${x.gid}` : "");
+}
+function docLink(x) {
+  const name = (x.title || x.doc) + (x.gid && x.gid !== "0" ? `（工作表 ${x.gid}）` : "");
+  return `<a href="${docUrl(x)}" target="_blank" title="${esc(x.doc)}">${esc(name)}</a>`;
+}
+function docRows(rows) {
+  const m = new Map();
+  for (const x of rows) {
+    if (x.st !== "work" || !x.doc) continue;
+    const d = m.get(x.doc) || { ...x, sec: 0, gids: new Set() };
+    d.sec += x.sec; if (x.title) d.title = x.title; if (x.gid) d.gids.add(x.gid);
+    m.set(x.doc, d);
+  }
+  return [...m.values()].sort((a, b) => b.sec - a.sec).map((d) => `<tr><td>${docLink({ ...d, gid: null })}</td>
+    <td><span class="badge" style="background:${COLOR[d.cat]}">${CAT[d.cat]}</span></td><td class="num">${dur(d.sec)}</td>
+    <td class="num">${d.gids.size || ""}</td></tr>`).join("");
+}
+
+function median(arr) {
+  const a = arr.filter((v) => isFinite(v)).sort((x, y) => x - y);
+  if (!a.length) return 0;
+  const m = Math.floor(a.length / 2);
+  return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+}
+
+function renderCats(rows) {
+  const m = {};
+  for (const x of rows) { const k = x.off ? "off" : x.st === "work" ? x.cat || "other" : x.st; m[k] = (m[k] || 0) + x.sec; }
+  const total = Object.values(m).reduce((a, b) => a + b, 0) || 1;
+  const body = Object.entries(m).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<tr><td><span class="badge" style="background:${COLOR[k]}">${CAT[k] || STATE[k] || "未上班（連續閒置）"}</span></td>
+    <td class="num">${dur(v)}</td><td class="num">${((v / total) * 100).toFixed(1)}%</td>
+    <td style="width:45%"><div style="height:10px;border-radius:3px;background:${COLOR[k]};width:${(v / total) * 100}%"></div></td></tr>`).join("");
+  const hm = {};
+  for (const x of rows) if (x.st === "work" && x.cat === "other") hm[x.host || "(未知)"] = (hm[x.host || "(未知)"] || 0) + x.sec;
+  const otherTotal = Object.values(hm).reduce((a, b) => a + b, 0) || 1;
+  const hostBody = Object.entries(hm).sort((a, b) => b[1] - a[1]).map(([h, v]) => `<tr><td>${esc(h)}</td><td class="num">${dur(v)}</td>
+    <td class="num">${((v / otherTotal) * 100).toFixed(1)}%</td></tr>`).join("");
+  $("tabCats").innerHTML = table(["系統／狀態", "時間", "占比", ""], null, body) +
+    `<h2 style="margin:18px 0 8px;font-size:14px">Google 文件明細（依文件）</h2>` +
+    table(["文件", "類型", "時間", "工作表數"], null, docRows(rows) || "<tr><td colspan='4' class='muted'>沒有 Google 文件紀錄</td></tr>") +
+    `<h2 style="margin:18px 0 8px;font-size:14px">其他網站明細（依網域）</h2>` +
+    table(["網域", "時間", "占其他網站比例"], null, hostBody || "<tr><td colspan='3' class='muted'>沒有其他網站紀錄</td></tr>");
+}
+
+function table(heads, keys, body) {
+  const th = heads.map((h, i) => `<th${keys ? ` data-k="${keys[i]}"` : ""}>${h}${keys && sortKey === keys[i] ? (sortDir > 0 ? " ▲" : " ▼") : ""}</th>`).join("");
+  return `<table><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function bindSort(id, rerender) {
+  $(id).querySelectorAll("th[data-k]").forEach((th) => (th.onclick = () => {
+    const k = th.dataset.k;
+    if (sortKey === k) { if (sortDir > 0) sortDir = -1; else { sortKey = null; sortDir = 1; } } else { sortKey = k; sortDir = 1; }
+    rerender();
+  }));
+}
+
+document.querySelectorAll(".tabs button").forEach((b) => (b.onclick = () => {
+  document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("on", x === b));
+  for (const t of ["Detail", "Cases", "Cats", "Agents"]) $("tab" + t).classList.toggle("hide", "tab" + t !== "tab" + b.dataset.tab[0].toUpperCase() + b.dataset.tab.slice(1));
+}));
+
+// ---------- 功能使用 ----------
+let USAGE_ALL = [];
+const OK_RESULTS = new Set(["成功", "無異常", "有異常", "登入完成", "成功（含圖片）"]);
+let uAutoPick = null;
+
+function ingestUsage(data) {
+  const rows = [];
+  for (const b of Object.values(data || {})) {
+    if (!b || !Array.isArray(b.counts) && !b.counts) continue;
+    const counts = Array.isArray(b.counts) ? b.counts : Object.values(b.counts);
+    for (const c of counts) if (c) rows.push({ em: b.em, dev: b.dev, date: c.date, t: c.t, f: c.f, d: c.d, n: c.n });
+  }
+  loadUsage(rows);
+}
+
+function loadUsage(rows) {
+  USAGE_ALL = [];
+  for (const c of rows) {
+    if (!c.f || !c.t) continue;
+    USAGE_ALL.push({ em: c.em || "(未知)", dev: c.dev || "", date: String(c.date || "").slice(0, 10), t: c.t, f: c.f, d: c.d || "", n: Number(c.n) || 0 });
+  }
+  if (!USAGE_ALL.length) return;
+  const dates = [...new Set(USAGE_ALL.map((x) => x.date))].sort();
+  const opt = (v) => `<option>${esc(v)}</option>`;
+  $("uFrom").innerHTML = dates.map(opt).join(""); $("uTo").innerHTML = dates.map(opt).join("");
+  $("uFrom").value = dates.at(-1); $("uTo").value = dates.at(-1);
+  const agents = [...new Set(USAGE_ALL.map((x) => x.em))].sort();
+  $("uAgent").innerHTML = `<option value="">全部專員（${agents.length} 人）</option>` + agents.map(opt).join("");
+  for (const id of ["uFrom", "uTo", "uAgent"]) $(id).onchange = renderUsage;
+  $("usageApp").classList.remove("hide");
+  setMsg($("msg").textContent + `；功能使用 ${USAGE_ALL.length} 筆`);
+  renderUsage();
+}
+
+function usageRows(withAgent = true) {
+  const from = $("uFrom").value, to = $("uTo").value, em = $("uAgent").value;
+  return USAGE_ALL.filter((x) => x.date >= from && x.date <= to && (!withAgent || !em || x.em === em));
+}
+
+function sumBy(rows, keyFn) {
+  const m = new Map();
+  for (const x of rows) {
+    const k = keyFn(x);
+    const v = m.get(k) || { n: 0, people: new Set(), rows: [] };
+    v.n += x.n; v.people.add(x.em); v.rows.push(x);
+    m.set(k, v);
+  }
+  return m;
+}
+
+function renderUsage() {
+  const rows = usageRows();
+  const people = new Set(rows.map((x) => x.em)).size;
+  $("uInfo").textContent = `${people} 位專員有資料`;
+
+  // 點擊
+  const clicks = sumBy(rows.filter((x) => x.t === "click"), (x) => x.f);
+  const toolbarShows = rows.filter((x) => x.t === "show" && x.f === "工具列").reduce((a, x) => a + x.n, 0);
+  $("uToolbarNote").textContent = toolbarShows ? `工具列出現 ${toolbarShows} 次（約等於打開案件次數）；「工具列 / …」的使用率＝點擊次數 ÷ 出現次數。` : "";
+  const clickBody = [...clicks.entries()].sort((a, b) => b[1].n - a[1].n).map(([f, v]) => {
+    const teams = sumBy(v.rows, (x) => x.d || "-");
+    const teamTxt = [...teams.entries()].sort((a, b) => b[1].n - a[1].n).map(([t, tv]) => `${esc(t)} ${tv.n}`).join("、");
+    const rate = f.startsWith("工具列 / ") && toolbarShows ? ((v.n / toolbarShows) * 100).toFixed(1) + "%" : "";
+    return `<tr><td>${esc(f)}</td><td class="num">${v.n}</td><td class="num">${v.people.size}</td><td class="num">${(v.n / v.people.size).toFixed(1)}</td><td class="num">${rate}</td><td class="muted">${teamTxt}</td></tr>`;
+  }).join("");
+  $("uClicks").innerHTML = table(["區塊 / 按鈕", "次數", "使用人數", "每人平均", "使用率", "細項（組別等）"], null, clickBody || "<tr><td colspan='6' class='muted'>沒有點擊紀錄</td></tr>");
+
+  // 自動功能結果
+  const autos = sumBy(rows.filter((x) => x.t === "auto"), (x) => x.f);
+  const autoBody = [...autos.entries()].sort((a, b) => b[1].n - a[1].n).map(([f, v]) => {
+    const res = sumBy(v.rows, (x) => x.d || "-");
+    const bad = [...res.entries()].filter(([d]) => !OK_RESULTS.has(d)).reduce((a, [, r]) => a + r.n, 0);
+    const resTxt = [...res.entries()].sort((a, b) => b[1].n - a[1].n).map(([d, r]) => `<span style="color:${OK_RESULTS.has(d) ? "inherit" : "var(--outside)"}">${esc(d)} ${r.n}</span>`).join("、");
+    return `<tr><td><a href="#" data-auto="${esc(f)}">${esc(f)}</a></td><td class="num">${v.n}</td><td class="num">${v.people.size}</td><td class="num"><b>${((bad / v.n) * 100).toFixed(1)}%</b></td><td>${resTxt}</td></tr>`;
+  }).join("");
+  $("uAuto").innerHTML = table(["功能", "次數", "人數", "失敗率", "結果分布"], null, autoBody || "<tr><td colspan='5' class='muted'>沒有自動功能紀錄</td></tr>");
+  $("uAuto").querySelectorAll("a[data-auto]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); uAutoPick = a.dataset.auto; renderAutoAgents(); }));
+  renderAutoAgents();
+
+  // 自動顯示
+  const shows = sumBy(rows.filter((x) => x.t === "show"), (x) => x.f + "\t" + x.d);
+  const showBody = [...shows.entries()].sort((a, b) => b[1].n - a[1].n).map(([k, v]) => {
+    const [f, d] = k.split("\t");
+    return `<tr><td>${esc(f)}</td><td>${esc(d)}</td><td class="num">${v.n}</td><td class="num">${v.people.size}</td></tr>`;
+  }).join("");
+  $("uShows").innerHTML = table(["項目", "細項／提醒類型", "次數", "人數"], null, showBody || "<tr><td colspan='4' class='muted'>沒有顯示紀錄</td></tr>");
+}
+
+/** 某個自動功能：每位專員的結果與失敗率（不受專員篩選影響，方便找出錯誤率特別高的人） */
+function renderAutoAgents() {
+  if (!uAutoPick) { $("uAutoAgents").innerHTML = ""; return; }
+  const rows = usageRows(false).filter((x) => x.t === "auto" && x.f === uAutoPick);
+  const results = [...new Set(rows.map((x) => x.d || "-"))].sort();
+  const byAgent = sumBy(rows, (x) => x.em);
+  const rates = [];
+  const body = [...byAgent.entries()].map(([em, v]) => {
+    const r = sumBy(v.rows, (x) => x.d || "-");
+    const bad = [...r.entries()].filter(([d]) => !OK_RESULTS.has(d)).reduce((a, [, x]) => a + x.n, 0);
+    const rate = bad / v.n; rates.push(rate);
+    return { em, n: v.n, rate, cells: results.map((d) => (r.get(d) || { n: 0 }).n) };
+  }).sort((a, b) => b.rate - a.rate);
+  const med = median(rates);
+  const html = body.map((a) => `<tr><td>${esc(a.em)}</td><td class="num">${a.n}</td>` + a.cells.map((c) => `<td class="num">${c || ""}</td>`).join("") +
+    `<td class="num"${body.length >= 3 && a.rate > 0 && a.rate >= Math.max(med * 1.5, med + 0.1) ? ' style="background:rgba(216,24,24,.12);font-weight:600"' : ""}>${(a.rate * 100).toFixed(1)}%</td></tr>`).join("");
+  $("uAutoAgents").innerHTML = `<h2 style="font-size:14px;margin:0 0 6px">${esc(uAutoPick)}：各專員結果</h2>` +
+    table(["專員", "次數"].concat(results, ["失敗率"]), null, html);
+}
+
+// ---------- 表頭對齊：數字欄（td.num）的表頭也靠右，跟數字對齊 ----------
+function alignHeaders(root) {
+  root.querySelectorAll("table").forEach((t) => {
+    const first = t.querySelector("tbody tr:not(.gap)");
+    if (!first) return;
+    const ths = t.querySelectorAll("thead th");
+    [...first.children].forEach((td, i) => { if (ths[i]) ths[i].classList.toggle("num", td.classList.contains("num")); });
+  });
+}
+new MutationObserver(() => alignHeaders(document)).observe(document.body, { childList: true, subtree: true });
+
+// ---------- 上方分頁：專員操作時間／RR Helper 使用狀況 ----------
+function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (_) { return null; } }
+function showTop(tab) {
+  document.querySelectorAll(".toptabs button").forEach((b) => b.classList.toggle("on", b.dataset.top === tab));
+  const act = tab === "act";
+  $("app").classList.toggle("tabhide", !act);
+  $("usageApp").classList.toggle("tabhide", act);
+  // 沒有資料時顯示提示（main 還是 hide 表示沒載入到資料）
+  $("actEmpty").classList.toggle("tabhide", !act || !$("app").classList.contains("hide"));
+  $("usageEmpty").classList.toggle("tabhide", act || !$("usageApp").classList.contains("hide"));
+  store("rrhViewerTab", tab);
+}
+document.querySelectorAll(".toptabs button").forEach((b) => (b.onclick = () => showTop(b.dataset.top)));
+// 資料載入後 main 的 hide 會被拿掉，提示要跟著更新
+const topObserver = new MutationObserver(() => showTop(document.querySelector(".toptabs button.on").dataset.top));
+topObserver.observe($("app"), { attributes: true, attributeFilter: ["class"] });
+topObserver.observe($("usageApp"), { attributes: true, attributeFilter: ["class"] });
+
+// ---------- 白天／黑暗模式 ----------
+function applyTheme(t) {
+  if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  else delete document.documentElement.dataset.theme;
+  const dark = t === "dark" || (t !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+  $("themeBtn").textContent = dark ? "☀ 白天模式" : "☾ 黑暗模式";
+}
+$("themeBtn").onclick = () => {
+  const dark = document.documentElement.dataset.theme === "dark" ||
+    (!document.documentElement.dataset.theme && matchMedia("(prefers-color-scheme: dark)").matches);
+  const next = dark ? "light" : "dark";
+  store("rrhViewerTheme", next); applyTheme(next);
+};
+applyTheme(store("rrhViewerTheme"));
+showTop(store("rrhViewerTab") === "usage" ? "usage" : "act");
+
+// ---------- 匯出 ----------
+$("csvBtn").onclick = () => {
+  const head = ["專員", "日期", "開始", "結束", "秒數", "狀態", "系統", "RID", "網域", "文件標題", "文件ID", "工作表", "開啟案件頁數", "裝置", "版本"];
+  const lines = [head.join(",")].concat(view.map((x) => [x.em, x.date, fmtTime(x.s), fmtTime(x.e), x.sec, STATE[x.st] || x.st,
+    x.cat ? CAT[x.cat] || x.cat : "", x.rid ? `'${x.rid}` : "", x.host || "", x.title || "", x.doc || "", x.gid || "", x.tabs ?? "", x.dev, x.ver].map(csvCell).join(",")));
+  const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `工作紀錄_${$("fAgent").value.split("@")[0]}_${$("fDate").value || "全部"}.csv`;
+  a.click();
+};
+
+// ---------- 工具 ----------
+function fmtTime(ms) { return new Date(ms).toLocaleTimeString("sv-SE", { timeZone: "Asia/Taipei", hour12: false }); }
+function dur(sec) {
+  sec = Math.round(sec);
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  return h ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}` : `${m}:${String(s).padStart(2, "0")}`;
+}
+function esc(s) { return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function csvCell(v) { v = String(v ?? ""); return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v; }
+
+// ---------- 資料來源 ----------
+const CFG = {
+  clientId: "",          // 部署時可直接填 OAuth Client ID（xxx.apps.googleusercontent.com），留空則在畫面上輸入
+  allowedEmail: "",      // 填你的 Google 帳號：登入的不是這個帳號就擋下來（只是多一層提示，真正的保護是 Drive 權限與 OAuth 測試使用者）
+  fileName: "rrh_activity.db",
+  sqlJs: "https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/",
+};
+const loadExt = (src) => new Promise((ok, ng) => {
+  const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = () => ng(new Error("無法載入 " + src)); document.head.appendChild(s);
+});
+
+function setSource(v) {
+  store("rrhViewerSrc", v); $("srcSel").value = v;
+  for (const [k, id] of [["drive", "driveBar"], ["mypage", "mpBar"], ["firebase", "fbBar"], ["local", "localBar"]]) $(id).classList.toggle("hide", k !== v);
+  $("daysWrap").classList.toggle("hide", !(v === "drive" || v === "mypage"));
+  if (v === "drive") { loadExt("https://accounts.google.com/gsi/client").catch(() => {}); loadExt(CFG.sqlJs + "sql-wasm.js").catch(() => {}); }   // 先載入，登入彈窗才不會被瀏覽器擋
+  if (v === "mypage") mpLoad();
+}
+$("srcSel").onchange = () => setSource($("srcSel").value);
+
+// ----- Google Drive（.db）-----
+let gToken = null, gExp = 0, SQLP = null;
+if (CFG.clientId) $("gClient").classList.add("hide"); else $("gClient").value = store("rrhGClient") || "";
+$("gFile").value = store("rrhGFile") || "";
+
+function getToken() {
+  if (gToken && Date.now() < gExp) return Promise.resolve(gToken);
+  const cid = CFG.clientId || $("gClient").value.trim();
+  if (!cid) return Promise.reject(new Error("請先填入 OAuth Client ID"));
+  if (!window.google?.accounts) return Promise.reject(new Error("Google 登入元件尚未載入，請稍候再按一次（或檢查網路／擴充功能擋廣告）"));
+  store("rrhGClient", cid);
+  return new Promise((ok, ng) => {
+    google.accounts.oauth2.initTokenClient({
+      client_id: cid, scope: "https://www.googleapis.com/auth/drive.readonly",
+      callback: (r) => { if (r.error) return ng(new Error(r.error_description || r.error)); gToken = r.access_token; gExp = Date.now() + (r.expires_in - 60) * 1000; ok(gToken); },
+      error_callback: (e) => ng(new Error(e.type === "popup_closed" ? "登入視窗被關閉" : e.type || "登入失敗")),
+    }).requestAccessToken({});
+  });
+}
+async function gfetch(url) {
+  const r = await fetch(url, { headers: { Authorization: "Bearer " + (await getToken()) } });
+  if (!r.ok) throw new Error(`Drive HTTP ${r.status}：${(await r.text()).slice(0, 140)}`);
+  return r;
+}
+function driveId(s) {
+  s = (s || "").trim();
+  return (s.match(/\/d\/([\w-]{15,})/) || s.match(/[?&]id=([\w-]{15,})/) || s.match(/^([\w-]{15,})$/) || [])[1] || "";
+}
+
+$("gLoad").onclick = async () => {
+  try {
+    setMsg("登入 Google…");
+    await getToken();
+    const who = (await (await gfetch("https://www.googleapis.com/drive/v3/about?fields=user(emailAddress,displayName)")).json()).user || {};
+    if (CFG.allowedEmail && who.emailAddress !== CFG.allowedEmail) { gToken = null; throw new Error(`這個帳號（${who.emailAddress}）沒有使用權限`); }
+    $("gWho").textContent = who.emailAddress || "";
+    store("rrhGFile", $("gFile").value.trim());
+    let id = driveId($("gFile").value), note = "";
+    if (!id) {
+      setMsg(`搜尋 ${CFG.fileName}…`);
+      const q = encodeURIComponent(`name='${CFG.fileName}' and trashed=false`);
+      const list = (await (await gfetch(`https://www.googleapis.com/drive/v3/files?q=${q}&orderBy=modifiedTime desc&fields=files(id,name,modifiedTime)&supportsAllDrives=true&includeItemsFromAllDrives=true`)).json()).files || [];
+      if (!list.length) throw new Error(`Drive 裡找不到 ${CFG.fileName}（也可以直接貼上檔案連結）`);
+      id = list[0].id; note = `（資料庫更新於 ${new Date(list[0].modifiedTime).toLocaleString("sv-SE", { timeZone: "Asia/Taipei" })}）`;
+    }
+    setMsg("下載資料庫…");
+    const buf = await (await gfetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media&supportsAllDrives=true`)).arrayBuffer();
+    await loadDbBuffer(buf, Number($("days").value) || 7, note);
+  } catch (e) { setMsg("讀取失敗：" + e.message); }
+};
+$("days").onchange = () => { if ($("srcSel").value === "drive" && gToken) $("gLoad").click(); };
+
+// ----- SQLite（Drive 下載或本機檔案）-----
+const ALIAS_SEG = { s: ["s", "start", "start_time", "started_at", "seg_start"], e: ["e", "end", "end_time", "ended_at", "seg_end"], st: ["st", "state", "status"], cat: ["cat", "category"],
+  rid: ["rid"], host: ["host", "domain"], doc: ["doc", "doc_id"], gid: ["gid"], title: ["title", "doc_title"], dev: ["dev", "device"], tabs: ["tabs", "case_tabs"], em: ["em", "email"], ver: ["ver", "version"] };
+const ALIAS_USE = { em: ["em", "email"], dev: ["dev", "device"], date: ["date", "day"], t: ["t", "type"], f: ["f", "feature"], d: ["d", "detail"], n: ["n", "count", "cnt"] };
+
+function dbRows(db, table, alias, timeKey, days) {
+  const info = db.exec(`PRAGMA table_info(${table})`)[0];
+  if (!info) throw new Error(`資料庫裡沒有 ${table} 資料表（現有：${(db.exec("SELECT name FROM sqlite_master WHERE type='table'")[0]?.values || []).flat().join("、") || "無"}）`);
+  const cols = info.values.map((r) => r[1]), low = cols.map((c) => c.toLowerCase());
+  const map = {};
+  for (const [k, names] of Object.entries(alias)) { const i = names.map((n) => low.indexOf(n)).find((i) => i >= 0); if (i !== undefined) map[k] = cols[i]; }
+  const need = Object.keys(alias).filter((k) => ["s", "e", "st", "f", "t"].includes(k));
+  const miss = need.filter((k) => !map[k]);
+  if (miss.length) throw new Error(`${table} 的欄位對不到（${miss.join("、")}）；實際欄位：${cols.join("、")}`);
+  let where = "";
+  if (days && map[timeKey]) {
+    const c = `"${map[timeKey]}"`, cut = fmtDate(Date.now() - (days - 1) * 86400e3), ms = toMs(cut + " 00:00:00");
+    const typ = db.exec(`SELECT typeof(${c}) FROM ${table} LIMIT 1`)[0]?.values[0][0];
+    where = typ === "text" ? ` WHERE substr(${c},1,10) >= '${cut}'` : ` WHERE (${c} >= 1e12 AND ${c} >= ${ms}) OR (${c} < 1e12 AND ${c} >= ${ms / 1000})`;
+  }
+  const res = db.exec(`SELECT * FROM ${table}${where}`)[0];
+  if (!res) return [];
+  const idx = Object.fromEntries(Object.entries(map).map(([k, c]) => [k, res.columns.indexOf(c)]));
+  return res.values.map((v) => Object.fromEntries(Object.entries(idx).map(([k, i]) => [k, v[i]])));
+}
+
+async function loadDbBuffer(buf, days, note = "") {
+  if (!window.initSqlJs) await loadExt(CFG.sqlJs + "sql-wasm.js");
+  SQLP ||= await initSqlJs({ locateFile: (f) => CFG.sqlJs + f });
+  const db = new SQLP.Database(new Uint8Array(buf));
+  try {
+    const segs = dbRows(db, "activity_segments", ALIAS_SEG, "s", days);
+    loadSegs(segs, `已讀取${days ? `最近 ${days} 天` : "全部"}` + note, 0);
+    try { loadUsage(dbRows(db, "usage_counts", ALIAS_USE, "date", days)); } catch (e) { setMsg($("msg").textContent + `；功能使用未載入：${e.message}`); }
+  } finally { db.close(); }
+}
+
+// ----- MyPage：同一個資料夾有 rrh_index.js 時，讀排程產生的每日檔案（MyPage 擋 fetch，所以用 <script> 載入）-----
+window.__rrh = window.__rrh || {};
+function mpScript(name) {
+  const href = location.href.replace(/[?#].*$/, "");
+  const dir = /\.html?$/i.test(href) || href.endsWith("/") ? href : href + "/";   // 網址結尾沒有「/」時先補上
+  return new Promise((resolve, reject) => {
+    const key = name.replace(/\.js$/, ""), el = document.createElement("script");
+    el.src = new URL(name, dir).href + "?t=" + Date.now();
+    el.onload = () => { el.remove(); key in window.__rrh ? resolve(window.__rrh[key]) : reject(new Error("檔案內容不正確")); };
+    el.onerror = () => { el.remove(); reject(new Error("載入失敗")); };
+    document.head.appendChild(el);
+  });
+}
+async function mpLoad() {
+  let idx;
+  try { idx = await mpScript("rrh_index.js"); }
+  catch (e) { setMsg(`讀不到 rrh_index.js（${e.message}）。MyPage 來源只能在 MyPage 網頁上使用，這裡請改選其他來源`); return; }
+  $("mpGen").textContent = idx.generated_at || "-";
+  const dates = (idx.dates || []).slice(-(Number($("days").value) || 7));
+  setMsg("讀取中…");
+  const merged = {};
+  await Promise.all(dates.map(async (d) => {
+    try { for (const [k, v] of Object.entries((await mpScript((idx.files || {})[d])) || {})) merged[d + "|" + k] = v; } catch (_) {}   // 同一批可能跨日，加上日期避免互蓋
+  }));
+  ingest(merged);
+  try { ingestUsage(await mpScript(idx.usage_file || "rrh_usage.js")); } catch (_) {}
+}
+$("mpReload").onclick = mpLoad;
+
+if ("serviceWorker" in navigator && location.protocol === "https:" && !location.hostname.includes("mypage")) navigator.serviceWorker.register("sw.js").catch(() => {});
+
+setSource(location.hostname.includes("mypage") ? "mypage" : store("rrhViewerSrc") || (location.protocol === "file:" ? "firebase" : "drive"));
+</script>
+</body>
+</html>
