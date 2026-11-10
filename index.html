@@ -75,6 +75,9 @@ a{color:var(--accent)}
 .lv tr.off td{color:var(--muted);font-size:13px;border-top:1px dashed var(--line)}
 .lvnote{font-size:12px;margin:6px 0 0}
 .warn{color:var(--outside)}
+tr.me td{background:rgba(79,142,247,.14)}
+.cmp td small{display:block;color:var(--muted);font-size:11px}
+.cmp td.d{white-space:nowrap}
 /* RWD */
 .toptabs{overflow-x:auto}
 .toptabs button{white-space:nowrap}
@@ -142,7 +145,7 @@ a{color:var(--accent)}
 <main id="app" class="hide">
   <div class="card">
     <div class="row">
-      <label>專員 <select id="fAgent"></select></label>
+      <label>專員 <input id="fAgent" list="agentList" autocomplete="off" size="26" placeholder="輸入帳號搜尋"><datalist id="agentList"></datalist></label>
       <label>裝置 <select id="fDev"></select></label>
       <label>日期 <select id="fDate"></select></label>
       <label>RID <input id="fRid" size="18" placeholder="輸入部分即可"></label>
@@ -153,6 +156,13 @@ a{color:var(--accent)}
       <label class="muted">連續閒置 ≥ <input id="fOffH" type="number" min="0" step="0.5" value="3" style="width:56px"> 小時視為未上班（0＝關閉）</label>
       <button id="csvBtn">匯出 CSV</button>
     </div>
+    <div class="row" id="orgRow" style="margin-top:8px">
+      <label>群體 L1 <select id="fL1"></select></label>
+      <label>L2 <select id="fL2"></select></label>
+      <label>單位對照表（CSV：email, L1, L2） <input type="file" id="orgFile" accept=".csv,.tsv,.txt"></label>
+      <button id="orgClear">清除對照表</button>
+      <span class="muted" id="orgMsg"></span>
+    </div>
     <div class="row chips" id="fStates" style="margin-top:8px"></div>
     <div class="row chips" id="fCats" style="margin-top:6px"></div>
   </div>
@@ -161,6 +171,11 @@ a{color:var(--accent)}
     <h2>總覽</h2>
     <div id="levels"></div>
     <div class="stats" id="stats" style="margin-top:12px"></div>
+  </div>
+
+  <div class="card">
+    <h2>個人 vs 群體</h2>
+    <div id="cmp"></div>
   </div>
 
   <div class="card">
@@ -307,23 +322,141 @@ function loadSegs(rows, label, skipped = 0) {
   render();
 }
 
+// ---------- 專員搜尋 ＋ 群體（單位 L1／L2）----------
+let AGENTS = [], curAgent = "", ORG = {};
+try { ORG = JSON.parse(store("rrhOrg") || "{}") || {}; } catch (_) { ORG = {}; }
+const orgOf = (em) => { const k = String(em).toLowerCase(); return ORG[k] || ORG[k.split("@")[0]] || null; };
+const orgLabel = (em) => { const o = orgOf(em); return o ? [o.l1, o.l2].filter(Boolean).join(" / ") : ""; };
+
+function setAgent(v) {
+  $("fAgent").value = v;
+  if (v === curAgent) return;
+  curAgent = v; fillDates(); render();
+}
+function bindAgentBox() {
+  const ag = $("fAgent");
+  const match = (t) => {
+    t = t.trim().toLowerCase(); if (!t) return null;
+    const exact = AGENTS.find((a) => a.toLowerCase() === t); if (exact) return exact;
+    const part = AGENTS.filter((a) => a.toLowerCase().includes(t) || orgLabel(a).toLowerCase().includes(t));
+    return part.length === 1 ? part[0] : null;
+  };
+  ag.onfocus = () => { ag.placeholder = curAgent + "（輸入搜尋）"; ag.value = ""; };
+  ag.oninput = () => { const e = AGENTS.find((a) => a.toLowerCase() === ag.value.trim().toLowerCase()); if (e) { setAgent(e); ag.blur(); } };
+  ag.onchange = () => { const m = match(ag.value); if (m) setAgent(m); };
+  ag.onblur = () => { const m = match(ag.value); setAgent(m || curAgent); };
+  ag.onkeydown = (e) => { if (e.key === "Enter") ag.blur(); };
+}
+
+function parseOrg(text) {
+  const rows = text.replace(/^\uFEFF/, "").split(/\r?\n/).map((l) => l.split(/\t|,/).map((c) => c.trim().replace(/^"|"$/g, ""))).filter((r) => r.some(Boolean));
+  if (!rows.length) return {};
+  const h = rows[0].map((c) => c.toLowerCase());
+  const N = { e: ["email", "em", "mail", "帳號", "信箱"], 1: ["l1", "l1單位", "一級單位", "unit1", "部門"], 2: ["l2", "l2單位", "二級單位", "unit2", "組別", "團隊"] };
+  const has = h.some((c) => [...N.e, ...N[1], ...N[2]].includes(c));
+  const pick = (names, d) => { const i = h.findIndex((c) => names.includes(c)); return has && i >= 0 ? i : d; };
+  const ie = pick(N.e, 0), i1 = pick(N[1], 1), i2 = pick(N[2], 2), out = {};
+  for (const r of rows.slice(has ? 1 : 0)) { const e = (r[ie] || "").toLowerCase(); if (e) out[e] = { l1: r[i1] || "", l2: r[i2] || "" }; }
+  return out;
+}
+function setOrg(obj) { ORG = obj; store("rrhOrg", JSON.stringify(obj)); orgRefresh(); if (ALL.length) render(); }
+$("orgFile").onchange = async (e) => { const f = e.target.files[0]; if (!f) return; setOrg(parseOrg(await f.text())); e.target.value = ""; };
+$("orgClear").onclick = () => setOrg({});
+
+function orgRefresh() {
+  const l1s = [...new Set(AGENTS.map(orgOf).filter(Boolean).map((o) => o.l1).filter(Boolean))].sort();
+  const keep = $("fL1").value;
+  $("fL1").innerHTML = `<option value="">全部專員</option>` + l1s.map((x) => `<option>${esc(x)}</option>`).join("");
+  if (l1s.includes(keep)) $("fL1").value = keep;
+  fillL2();
+  $("agentList").innerHTML = AGENTS.map((a) => `<option value="${esc(a)}" label="${esc(orgLabel(a))}"></option>`).join("");
+  const n = Object.keys(ORG).length, hit = AGENTS.filter(orgOf).length;
+  $("orgMsg").textContent = n ? `已載入 ${n} 筆，資料中對應到 ${hit}／${AGENTS.length} 位` : "尚未載入單位對照表";
+}
+function fillL2() {
+  const l1 = $("fL1").value, keep = $("fL2").value;
+  const l2s = [...new Set(AGENTS.map(orgOf).filter((o) => o && (!l1 || o.l1 === l1) && o.l2).map((o) => o.l2))].sort();
+  $("fL2").innerHTML = `<option value="">全部</option>` + l2s.map((x) => `<option>${esc(x)}</option>`).join("");
+  if (l2s.includes(keep)) $("fL2").value = keep;
+}
+function groupMembers() {
+  const l1 = $("fL1").value, l2 = $("fL2").value;
+  if (!l1 && !l2) return null;
+  return AGENTS.filter((a) => { const o = orgOf(a); return o && (!l1 || o.l1 === l1) && (!l2 || o.l2 === l2); });
+}
+
+/** 個人 vs 群體：每人先算「日均」，群體取中位數（不含本人）；占比＝L1 占總經過時間、L2 占所屬 L1 */
+const CMP_ITEMS = [
+  ["總經過時間", (m) => m.T, null, 0],
+  ["工作中", (m) => m.v.work, (m) => m.T, 0],
+  ["DMS 案件頁", (m) => m.v.w.case, (m) => m.v.work, 1],
+  ["內部與查詢系統", (m) => m.v.w.int, (m) => m.v.work, 1],
+  ["Google 文件", (m) => m.v.w.gdoc, (m) => m.v.work, 1],
+  ["其他網站", (m) => m.v.w.other, (m) => m.v.work, 1],
+  ["Chrome 外", (m) => m.v.outside, (m) => m.T, 0],
+  ["閒置", (m) => m.v.idle, (m) => m.T, 0],
+  ["停在工作頁面閱讀", (m) => m.v.i.page, (m) => m.v.idle, 1],
+  ["離開座位／電腦鎖定", (m) => m.v.i.away, (m) => m.v.idle, 1],
+  ["沒有紀錄", (m) => m.v.gap, (m) => m.T, 0],
+];
+function agentMetrics(rows) {
+  if (!rows.length) return null;
+  const v = levelStats(rows), T = v.span - v.off;
+  if (!(T > 0)) return null;
+  const days = new Set(rows.map((x) => x.date)).size;
+  const rids = new Set(rows.filter((x) => x.st === "work" && x.rid && !x.off).map((x) => x.rid)).size;
+  return { v, T, days, rids };
+}
+function renderCompare(base) {
+  const gm = groupMembers();
+  if (!gm) { $("cmp").innerHTML = `<p class="muted">在上方選擇群體（L1／L2）後，這裡會顯示「${esc(curAgent)}」和群體的對比。${Object.keys(ORG).length ? "" : "需要先匯入單位對照表（CSV：email, L1, L2）。"}</p>`; return; }
+  const date = $("fDate").value, from = $("fFrom").value, to = $("fTo").value, peers = new Set(gm.filter((a) => a !== curAgent));
+  const per = new Map();
+  for (const x of ALL) if (peers.has(x.em) && (!date || x.date === date) && inTime(x, from, to)) { if (!per.has(x.em)) per.set(x.em, []); per.get(x.em).push(x); }
+  const G = [...per.values()].map(agentMetrics).filter(Boolean);
+  const me = agentMetrics(base);
+  const lbl = [$("fL1").value, $("fL2").value].filter(Boolean).join(" / ");
+  if (!me) { $("cmp").innerHTML = `<p class="muted">${esc(curAgent)} 在目前的篩選條件下沒有資料。</p>`; return; }
+  if (!G.length) { $("cmp").innerHTML = `<p class="muted">群體「${esc(lbl)}」（不含本人）在這個範圍沒有其他人的資料。</p>`; return; }
+  const sg = (n) => (Math.abs(n) < 1 ? "±0" : (n > 0 ? "+" : "−") + dur(Math.abs(n)));
+  const rows = CMP_ITEMS.map(([name, f, par, lv]) => {
+    const mv = f(me) / me.days, mp = par ? (f(me) / par(me)) * 100 : null;
+    const gv = median(G.map((m) => f(m) / m.days)), gp = par ? median(G.filter((m) => par(m) > 0).map((m) => (f(m) / par(m)) * 100)) : null;
+    const dp = par ? mp - gp : null;
+    const cell = (v, p) => `${dur(v)}${p === null ? "" : `<small>${p.toFixed(1)}%</small>`}`;
+    return `<tr${lv ? "" : ' style="font-weight:600"'}><td${lv ? ' style="padding-left:22px"' : ""}>${name}</td><td class="num">${cell(mv, mp)}</td><td class="num">${cell(gv, gp)}</td>
+      <td class="num d">${sg(mv - gv)}${dp === null ? "" : `<small>${dp > 0 ? "+" : dp < 0 ? "−" : "±"}${Math.abs(dp).toFixed(1)} pp</small>`}</td></tr>`;
+  });
+  const mCases = me.rids / me.days, gCases = median(G.map((m) => m.rids / m.days));
+  const mPer = me.rids ? me.v.work / me.rids : 0, gPer = median(G.filter((m) => m.rids).map((m) => m.v.work / m.rids));
+  rows.push(`<tr style="font-weight:600"><td>處理案件數（日均）</td><td class="num">${mCases.toFixed(1)}</td><td class="num">${gCases.toFixed(1)}</td><td class="num d">${(mCases - gCases >= 0 ? "+" : "−") + Math.abs(mCases - gCases).toFixed(1)}</td></tr>`,
+    `<tr style="font-weight:600"><td>每件平均工作時間</td><td class="num">${mPer ? dur(mPer) : "-"}</td><td class="num">${gPer ? dur(gPer) : "-"}</td><td class="num d">${mPer && gPer ? sg(mPer - gPer) : "-"}</td></tr>`);
+  $("cmp").innerHTML = `<p class="muted">個人：${esc(curAgent)}${orgLabel(curAgent) ? "（" + esc(orgLabel(curAgent)) + "）" : ""}；群體：${esc(lbl)}，不含本人共 ${G.length} 位。數字是<b>日均</b>（${date || "全部日期"}），群體取<b>中位數</b>；小字是占比，差異的 pp＝百分點。人數很少時中位數參考性有限。</p>
+    <div class="tablewrap" style="max-height:none"><table class="cmp"><thead><tr><th>項目</th><th class="num">個人</th><th class="num">群體</th><th class="num">差異</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+}
+
 // ---------- 篩選 ----------
 function buildFilters() {
   const agents = [...new Set(ALL.map((x) => x.em))].sort();
-  $("fAgent").innerHTML = agents.map((a) => `<option>${esc(a)}</option>`).join("");
+  AGENTS = agents;
+  if (!agents.includes(curAgent)) curAgent = agents[0] || "";
+  $("fAgent").value = curAgent;
+  orgRefresh();
   fillDates();
   $("fStates").innerHTML = "<span class='muted'>狀態</span>" + Object.entries(STATE)
     .map(([k, v]) => `<label><input type="checkbox" value="${k}" checked> ${v}</label>`).join("");
   $("fCats").innerHTML = "<span class='muted'>系統</span>" + Object.entries(CAT)
     .map(([k, v]) => `<label><input type="checkbox" value="${k}" checked> ${v}</label>`).join("");
   for (const id of ["fDate", "fRid", "fHost", "fFrom", "fTo", "fMerge", "fAskMax", "fOffH"]) $(id).oninput = render;
-  $("fAgent").onchange = () => { fillDates(); render(); };
+  bindAgentBox();
+  $("fL1").onchange = () => { fillL2(); render(); };
+  $("fL2").onchange = render;
   $("fDev").onchange = render;
   $("fStates").onchange = render; $("fCats").onchange = render;
 }
 
 function fillDates() {
-  const em = $("fAgent").value;
+  const em = curAgent;
   const devs = [...new Set(ALL.filter((x) => x.em === em).map((x) => x.dev))].sort();
   $("fDev").innerHTML = `<option value="">全部裝置（${devs.length} 台）</option>` + devs.map((d) => `<option>${esc(d)}</option>`).join("");
   const dates = [...new Set(ALL.filter((x) => x.em === em).map((x) => x.date))].sort().reverse();
@@ -334,7 +467,7 @@ function fillDates() {
 function checked(id) { return new Set([...$(id).querySelectorAll("input:checked")].map((i) => i.value)); }
 
 function applyFilters() {
-  const em = $("fAgent").value, date = $("fDate").value, rid = $("fRid").value.trim(), host = $("fHost").value.trim().toLowerCase();
+  const em = curAgent, date = $("fDate").value, rid = $("fRid").value.trim(), host = $("fHost").value.trim().toLowerCase();
   const states = checked("fStates"), cats = checked("fCats");
   const from = $("fFrom").value, to = $("fTo").value;
   const dev = $("fDev").value;
@@ -390,7 +523,7 @@ function markOff() {
 
 /** 每天：上班＝第一筆非「未上班」紀錄的開始，下班＝最後一筆的結束；若緊接著是長時間閒置就標示出來 */
 function renderShift() {
-  const em = $("fAgent").value, dev = $("fDev").value;
+  const em = curAgent, dev = $("fDev").value;
   const rows = ALL.filter((x) => x.em === em && (!dev || x.dev === dev) && !x.off);
   const byDate = {};
   for (const x of rows) (byDate[x.date] ||= []).push(x);
@@ -412,6 +545,7 @@ function render() {
   const { base, shown } = applyFilters();
   view = shown;
   renderStats(base);
+  renderCompare(base);
   renderStrips(base);
   renderDetail(shown);
   renderCases(base);
@@ -577,7 +711,8 @@ function renderCases(rows) {
 function renderAgents() {
   const date = $("fDate").value;
   const merge = $("fMerge").checked;
-  const agents = [...new Set(ALL.map((x) => x.em))].sort();
+  const gm = groupMembers(), gset = gm && new Set(gm);
+  const agents = [...new Set(ALL.map((x) => x.em))].sort().filter((a) => !gset || gset.has(a));
   const stats = agents.map((em) => {
     let rows = ALL.filter((x) => x.em === em && (!date || x.date === date));
     if (merge) rows = mergeAdjacent(rows);
@@ -610,9 +745,9 @@ function renderAgents() {
     if (dir === "low" && v <= med[k] * 0.5) return " style=\"background:rgba(216,24,24,.12);font-weight:600\"";
     return "";
   };
-  const body = stats.map((a) => `<tr><td>${esc(a.em)}</td>` + cols.map(([k, , f, dir]) => `<td class="num"${flag(k, a[k], dir)}>${f(a[k])}</td>`).join("") + "</tr>").join("");
+  const body = stats.map((a) => `<tr${a.em === curAgent ? ' class="me"' : ""}><td>${esc(a.em)}${orgLabel(a.em) ? `<small class="muted" style="display:block">${esc(orgLabel(a.em))}</small>` : ""}</td>` + cols.map(([k, , f, dir]) => `<td class="num"${flag(k, a[k], dir)}>${f(a[k])}</td>`).join("") + "</tr>").join("");
   const medRow = `<tr><td class="muted">中位數</td>` + cols.map(([k, , f]) => `<td class="num muted">${med[k] ? f(med[k]) : "-"}</td>`).join("") + "</tr>";
-  $("tabAgents").innerHTML = `<p class="muted">日期：${date || "全部"}（跟著上方日期篩選，不受專員、裝置篩選影響）。偏離所有人中位數很多的格子會標紅：案件數低於一半，或時間高於 1.5 倍；至少 3 位專員才標。</p>` +
+  $("tabAgents").innerHTML = `<p class="muted">日期：${date || "全部"}（跟著上方日期篩選，不受專員、裝置篩選影響）。${gm ? `只列群體「${esc([$("fL1").value, $("fL2").value].filter(Boolean).join(" / "))}」的 ${agents.length} 位，藍底是目前選的專員。` : ""}偏離所有人中位數很多的格子會標紅：案件數低於一半，或時間高於 1.5 倍；至少 3 位專員才標。</p>` +
     table(["專員"].concat(cols.map((c) => c[1])), null, (body || "<tr><td colspan='8' class='muted'>沒有資料</td></tr>") + (stats.length ? medRow : ""));
 }
 
@@ -844,7 +979,7 @@ $("csvBtn").onclick = () => {
   const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = `工作紀錄_${$("fAgent").value.split("@")[0]}_${$("fDate").value || "全部"}.csv`;
+  a.download = `工作紀錄_${curAgent.split("@")[0]}_${$("fDate").value || "全部"}.csv`;
   a.click();
 };
 
@@ -863,6 +998,7 @@ const CFG = {
   clientId: "",          // 部署時可直接填 OAuth Client ID（xxx.apps.googleusercontent.com），留空則在畫面上輸入
   allowedEmail: "",      // 填你的 Google 帳號：登入的不是這個帳號就擋下來（只是多一層提示，真正的保護是 Drive 權限與 OAuth 測試使用者）
   fileName: "rrh_activity.db",
+  orgFile: "rrh_org.csv",   // 單位對照表（email, L1, L2），放在同一個 Drive 帳號底下就會自動載入
   sqlJs: "https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/",
 };
 const loadExt = (src) => new Promise((ok, ng) => {
@@ -926,6 +1062,11 @@ $("gLoad").onclick = async () => {
     setMsg("下載資料庫…");
     const buf = await (await gfetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media&supportsAllDrives=true`)).arrayBuffer();
     await loadDbBuffer(buf, Number($("days").value) || 7, note);
+    try {   // 單位對照表（選用）：找不到就維持畫面上匯入的版本
+      const q2 = encodeURIComponent(`name='${CFG.orgFile}' and trashed=false`);
+      const o = (await (await gfetch(`https://www.googleapis.com/drive/v3/files?q=${q2}&orderBy=modifiedTime desc&fields=files(id)&supportsAllDrives=true&includeItemsFromAllDrives=true`)).json()).files || [];
+      if (o.length) setOrg(parseOrg(await (await gfetch(`https://www.googleapis.com/drive/v3/files/${o[0].id}?alt=media&supportsAllDrives=true`)).text()));
+    } catch (_) {}
   } catch (e) { setMsg("讀取失敗：" + e.message); }
 };
 $("days").onchange = () => { if ($("srcSel").value === "drive" && gToken) $("gLoad").click(); };
