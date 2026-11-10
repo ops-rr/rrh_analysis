@@ -38,6 +38,11 @@ th,td{border-bottom:1px solid var(--line);padding:5px 8px;text-align:left;white-
 th{position:sticky;top:0;background:var(--card);cursor:pointer}
 td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 tr.gap td{background:var(--gap);color:var(--muted);font-style:italic}
+tr.evt td{background:rgba(250,176,5,.13);font-weight:600}
+.mkrow{position:relative;height:12px;margin-top:2px}
+.mkrow div{position:absolute;top:0;width:3px;height:12px;margin-left:-1px;border-radius:2px;background:#fab005}
+.mkrow div.judge{background:#e03131}
+.st-judge{color:#e03131;font-weight:700}.st-pending{color:#f08c00;font-weight:700}.st-peek{color:var(--muted)}
 .badge{display:inline-block;border-radius:4px;padding:0 6px;color:#fff;font-size:12px}
 .tablewrap{max-height:560px;overflow:auto}
 .strip{position:relative;height:34px;border-radius:6px;background:var(--line);overflow:hidden;margin:4px 0 2px}
@@ -159,7 +164,8 @@ tr.me td{background:rgba(79,142,247,.14)}
     <div class="row" id="orgRow" style="margin-top:8px">
       <label>群體 L1 <select id="fL1"></select></label>
       <label>L2 <select id="fL2"></select></label>
-      <label>單位對照表（CSV：email, L1, L2） <input type="file" id="orgFile" accept=".csv,.tsv,.txt"></label>
+      <label>L3 <select id="fL3"></select></label>
+      <label>單位對照表（CSV：email, L1, L2, L3） <input type="file" id="orgFile" accept=".csv,.tsv,.txt"></label>
       <button id="orgClear">清除對照表</button>
       <span class="muted" id="orgMsg"></span>
     </div>
@@ -235,16 +241,21 @@ tr.me td{background:rgba(79,142,247,.14)}
 const STATE = { work: "工作中", outside: "Chrome 外", idle: "閒置" };
 const CAT = {
   dms_case: "DMS 案件頁", dms_other: "DMS 其他頁", ih: "IH", bi: "BI", mypage: "MyPage",
-  g_sheet: "Google 試算表", g_form: "Google 表單", g_slides: "Google 簡報", g_doc: "Google 文件", other: "其他網站",
+  g_sheet: "Google 試算表", g_form: "Google 表單", g_slides: "Google 簡報", g_doc: "Google 文件",
+  chat: "聊天（SeaTalk 網頁）", ai: "外部 AI", other: "其他網站",
 };
 const COLOR = {
   dms_case: "var(--case)", dms_other: "#5aa9e6", ih: "#d6336c", bi: "#f59f00", mypage: "#868e96",
-  g_sheet: "#0b7285", g_form: "#7048e8", g_slides: "#e67700", g_doc: "#1971c2", other: "var(--other)",
+  g_sheet: "#0b7285", g_form: "#7048e8", g_slides: "#e67700", g_doc: "#1971c2", chat: "#2f9e44", ai: "#ae3ec9", other: "var(--other)",
   outside: "var(--outside)", idle: "var(--idle)", off: "var(--off)",
 };
 const EXTERNAL = new Set(["dms_other", "ih", "bi", "mypage", "g_sheet", "g_form", "g_slides", "g_doc"]);
+const WORK_PAGES = new Set(["dms_case", "dms_other", "ih", "bi", "mypage", "g_sheet", "g_form", "g_slides", "g_doc"]);   // 閒置時停在這些頁面＝可能在閱讀
+// Pending 原因代碼 → 名稱（知道的再補上；沒有的直接顯示代碼）
+const PENDING_REASON = { 21: "法務確認" };
 const $ = (id) => document.getElementById(id);
 let ALL = [];          // 所有片段
+let EVTS = [];         // 案件操作紀錄（26.11.11 起）：{ em, dev, ev, op, rid, t, m, p, code, btn, a }
 let view = [];         // 篩選後
 let sortKey = null, sortDir = 1;
 
@@ -272,6 +283,10 @@ $("loadBtn").onclick = async () => {
       const r2 = await fetch(`${base}/usage_inbox.json` + (secret ? `?auth=${encodeURIComponent(secret)}` : ""));
       if (r2.ok) ingestUsage(JSON.parse(await r2.text()));
     } catch (_) {}
+    try {   // 案件操作紀錄（26.11.11 起）
+      const r3 = await fetch(`${base}/case_inbox.json` + (secret ? `?auth=${encodeURIComponent(secret)}` : ""));
+      if (r3.ok) setEvts(evtsFromBatches(JSON.parse(await r3.text())));
+    } catch (_) {}
   } catch (e) { setMsg("讀取失敗：" + e.message); }
 };
 
@@ -280,6 +295,7 @@ $("fileInput").onchange = async (e) => {
   try {
     if (/\.(db|sqlite3?)$/i.test(f.name)) { setMsg("讀取資料庫…"); await loadDbBuffer(await f.arrayBuffer(), 0); return; }
     const data = JSON.parse(await f.text());
+    if (data.case_inbox) EVTS = evtsFromBatches(data.case_inbox);
     ingest(data.activity_inbox || (data.usage_inbox ? {} : data));   // 可匯入整個資料庫或只匯出 activity_inbox
     if (data.usage_inbox) ingestUsage(data.usage_inbox);
   } catch (err) { setMsg("檔案格式錯誤：" + err.message); }
@@ -292,9 +308,53 @@ const anyMs = (v) => typeof v === "number" ? (v < 1e12 ? v * 1000 : v)
   : /(Z|[+-]\d\d:?\d\d)$/i.test(String(v).trim()) ? Date.parse(String(v).replace(" ", "T")) : toMs(v);
 const fmtDate = (ms) => new Date(ms).toLocaleDateString("sv-SE", { timeZone: "Asia/Taipei" });
 
+/** 案件操作紀錄：一批一批的格式 → 一筆一筆 */
+function evtsFromBatches(data) {
+  const out = [];
+  for (const b of Object.values(data || {})) {
+    if (!b || !b.evts) continue;
+    for (const x of Array.isArray(b.evts) ? b.evts : Object.values(b.evts)) if (x && x.t && x.ev) out.push(x);
+  }
+  return out;
+}
+function normEvts(list) {
+  return list.map((x) => {
+    let a = x.a;
+    if (typeof a === "string") { try { a = JSON.parse(a); } catch (_) { a = null; } }
+    return { em: x.em || "(未知)", dev: x.dev || "(未記錄)", ev: x.ev, op: x.op || null, rid: x.rid ? String(x.rid) : null, t: anyMs(x.t),
+      m: x.m || null, p: x.p || null, code: x.code == null ? null : Number(x.code), btn: x.btn || null, a: a || {} };
+  }).filter((x) => isFinite(x.t)).sort((a, b) => a.t - b.t);
+}
+function setEvts(list) { EVTS = normEvts(list); if (ALL.length) render(); }
+const evtOk = (x) => x.code == null || (x.code >= 200 && x.code < 300);
+const verNum = (v) => { const m = String(v || "").match(/(\d+)\.(\d+)\.(\d+)/); return m ? +m[1] * 1e4 + +m[2] * 100 + +m[3] : 0; };
+const TRACK_VER = verNum("26.11.11");   // 這個版本起才有 Pending／Judge 紀錄
+const OP_NAME = { pending: "Pending", judge: "Judge" };
+const reasonName = (c) => (c == null ? "" : PENDING_REASON[c] ? `${PENDING_REASON[c]}（${c}）` : `代碼 ${c}`);
+
+/** 某位專員每件案件的 Pending／Judge（成功送出的）：rid → { pend: [{t, reason}], judge: 第一次 Judge 的時間 } */
+function caseOps(em) {
+  const m = new Map();
+  for (const x of EVTS) {
+    if (x.em !== em || x.ev !== "api" || !x.rid || !evtOk(x) || !OP_NAME[x.op]) continue;
+    const c = m.get(x.rid) || (m.set(x.rid, { pend: [], judge: null }), m.get(x.rid));
+    if (x.op === "pending") c.pend.push({ t: x.t, reason: x.a ? x.a.pending_reason : null });
+    else if (c.judge == null) c.judge = x.t;
+  }
+  return m;
+}
+function evtLabel(x) {
+  const name = OP_NAME[x.op] || `${x.m} ${x.p || ""}`;
+  const r = x.op === "pending" && x.a && x.a.pending_reason != null ? `：${reasonName(x.a.pending_reason)}` : "";
+  return `${name}${r}`;
+}
+
 function ingest(data) {   // Firebase／JSON：一批一批的格式
   const rows = []; let batches = 0, skipped = 0;
+  const ev = evtsFromBatches(data);   // MyPage 每日檔裡也有案件操作紀錄（批次 id 開頭 c:）
+  if (ev.length) EVTS = normEvts(ev);
   for (const [bid, b] of Object.entries(data || {})) {
+    if (b && b.evts && !b.segs) continue;
     if (!b || !b.segs) { skipped++; continue; }
     batches++;
     const segs = Array.isArray(b.segs) ? b.segs : Object.values(b.segs);
@@ -315,7 +375,8 @@ function loadSegs(rows, label, skipped = 0) {
       dev: x.dev || "(未記錄)", tabs: x.tabs ?? null, s, e, sec: Math.round((e - s) / 1000), date: fmtDate(s), batch: x.batch || "", ver: x.ver || "" });
   }
   ALL.sort((a, b) => a.em.localeCompare(b.em) || a.s - b.s);
-  setMsg(`${label}、${ALL.length} 個片段` + (skipped ? `（略過 ${skipped} 筆格式不完整的資料）` : ""));
+  if (EVTS.length && !Number.isFinite(EVTS[0].t)) EVTS = normEvts(EVTS);
+  setMsg(`${label}、${ALL.length} 個片段` + (EVTS.length ? `、${EVTS.length} 筆案件操作` : "") + (skipped ? `（略過 ${skipped} 筆格式不完整的資料）` : ""));
   if (!ALL.length) { $("app").classList.add("hide"); return; }
   buildFilters();
   $("app").classList.remove("hide");
@@ -326,7 +387,7 @@ function loadSegs(rows, label, skipped = 0) {
 let AGENTS = [], curAgent = "", ORG = {};
 try { ORG = JSON.parse(store("rrhOrg") || "{}") || {}; } catch (_) { ORG = {}; }
 const orgOf = (em) => { const k = String(em).toLowerCase(); return ORG[k] || ORG[k.split("@")[0]] || null; };
-const orgLabel = (em) => { const o = orgOf(em); return o ? [o.l1, o.l2].filter(Boolean).join(" / ") : ""; };
+const orgLabel = (em) => { const o = orgOf(em); return o ? [o.l1, o.l2, o.l3].filter(Boolean).join(" / ") : ""; };
 
 function setAgent(v) {
   $("fAgent").value = v;
@@ -352,11 +413,13 @@ function parseOrg(text) {
   const rows = text.replace(/^\uFEFF/, "").split(/\r?\n/).map((l) => l.split(/\t|,/).map((c) => c.trim().replace(/^"|"$/g, ""))).filter((r) => r.some(Boolean));
   if (!rows.length) return {};
   const h = rows[0].map((c) => c.toLowerCase());
-  const N = { e: ["email", "em", "mail", "帳號", "信箱"], 1: ["l1", "l1單位", "一級單位", "unit1", "部門"], 2: ["l2", "l2單位", "二級單位", "unit2", "組別", "團隊"] };
-  const has = h.some((c) => [...N.e, ...N[1], ...N[2]].includes(c));
-  const pick = (names, d) => { const i = h.findIndex((c) => names.includes(c)); return has && i >= 0 ? i : d; };
-  const ie = pick(N.e, 0), i1 = pick(N[1], 1), i2 = pick(N[2], 2), out = {};
-  for (const r of rows.slice(has ? 1 : 0)) { const e = (r[ie] || "").toLowerCase(); if (e) out[e] = { l1: r[i1] || "", l2: r[i2] || "" }; }
+  const N = { e: ["email", "em", "mail", "帳號", "信箱"], 1: ["l1", "l1單位", "一級單位", "unit1", "部門"], 2: ["l2", "l2單位", "二級單位", "unit2", "組別", "團隊"],
+    3: ["l3", "l3單位", "三級", "新舊", "新人", "年資", "tenure"] };
+  const has = h.some((c) => [...N.e, ...N[1], ...N[2], ...N[3]].includes(c));
+  const pick = (names, d) => { const i = h.findIndex((c) => names.includes(c)); return has && i >= 0 ? i : has ? -1 : d; };
+  const ie = Math.max(0, pick(N.e, 0)), i1 = pick(N[1], 1), i2 = pick(N[2], 2), i3 = pick(N[3], 3), out = {};
+  const at = (r, i) => (i >= 0 ? r[i] || "" : "");
+  for (const r of rows.slice(has ? 1 : 0)) { const e = (r[ie] || "").toLowerCase(); if (e) out[e] = { l1: at(r, i1), l2: at(r, i2), l3: at(r, i3) }; }
   return out;
 }
 function setOrg(obj) { ORG = obj; store("rrhOrg", JSON.stringify(obj)); orgRefresh(); if (ALL.length) render(); }
@@ -368,7 +431,7 @@ function orgRefresh() {
   const keep = $("fL1").value;
   $("fL1").innerHTML = `<option value="">全部專員</option>` + l1s.map((x) => `<option>${esc(x)}</option>`).join("");
   if (l1s.includes(keep)) $("fL1").value = keep;
-  fillL2();
+  fillL2(); fillL3();
   $("agentList").innerHTML = AGENTS.map((a) => `<option value="${esc(a)}" label="${esc(orgLabel(a))}"></option>`).join("");
   const n = Object.keys(ORG).length, hit = AGENTS.filter(orgOf).length;
   $("orgMsg").textContent = n ? `已載入 ${n} 筆，資料中對應到 ${hit}／${AGENTS.length} 位` : "尚未載入單位對照表";
@@ -379,10 +442,17 @@ function fillL2() {
   $("fL2").innerHTML = `<option value="">全部</option>` + l2s.map((x) => `<option>${esc(x)}</option>`).join("");
   if (l2s.includes(keep)) $("fL2").value = keep;
 }
+/** L3（例如 新人／一般）：跟 L1、L2 交叉篩選；選單只列在目前 L1／L2 下有出現的值 */
+function fillL3() {
+  const l1 = $("fL1").value, l2 = $("fL2").value, keep = $("fL3").value;
+  const l3s = [...new Set(AGENTS.map(orgOf).filter((o) => o && (!l1 || o.l1 === l1) && (!l2 || o.l2 === l2) && o.l3).map((o) => o.l3))].sort();
+  $("fL3").innerHTML = `<option value="">全部</option>` + l3s.map((x) => `<option>${esc(x)}</option>`).join("");
+  if (l3s.includes(keep)) $("fL3").value = keep;
+}
 function groupMembers() {
-  const l1 = $("fL1").value, l2 = $("fL2").value;
-  if (!l1 && !l2) return null;
-  return AGENTS.filter((a) => { const o = orgOf(a); return o && (!l1 || o.l1 === l1) && (!l2 || o.l2 === l2); });
+  const l1 = $("fL1").value, l2 = $("fL2").value, l3 = $("fL3").value;
+  if (!l1 && !l2 && !l3) return null;
+  return AGENTS.filter((a) => { const o = orgOf(a); return o && (!l1 || o.l1 === l1) && (!l2 || o.l2 === l2) && (!l3 || o.l3 === l3); });
 }
 
 /** 個人 vs 群體：每人先算「日均」，群體取中位數（不含本人）；占比＝L1 占總經過時間、L2 占所屬 L1 */
@@ -392,11 +462,14 @@ const CMP_ITEMS = [
   ["DMS 案件頁", (m) => m.v.w.case, (m) => m.v.work, 1],
   ["內部與查詢系統", (m) => m.v.w.int, (m) => m.v.work, 1],
   ["Google 文件", (m) => m.v.w.gdoc, (m) => m.v.work, 1],
+  ["聊天（SeaTalk 網頁）", (m) => m.v.w.chat, (m) => m.v.work, 1],
+  ["外部 AI", (m) => m.v.w.ai, (m) => m.v.work, 1],
   ["其他網站", (m) => m.v.w.other, (m) => m.v.work, 1],
   ["Chrome 外", (m) => m.v.outside, (m) => m.T, 0],
   ["閒置", (m) => m.v.idle, (m) => m.T, 0],
   ["停在工作頁面閱讀", (m) => m.v.i.page, (m) => m.v.idle, 1],
-  ["離開座位／電腦鎖定", (m) => m.v.i.away, (m) => m.v.idle, 1],
+  ["離開座位", (m) => m.v.i.away, (m) => m.v.idle, 1],
+  ["電腦鎖定", (m) => m.v.i.lock, (m) => m.v.idle, 1],
   ["沒有紀錄", (m) => m.v.gap, (m) => m.T, 0],
 ];
 function agentMetrics(rows) {
@@ -405,17 +478,19 @@ function agentMetrics(rows) {
   if (!(T > 0)) return null;
   const days = new Set(rows.map((x) => x.date)).size;
   const rids = new Set(rows.filter((x) => x.st === "work" && x.rid && !x.off).map((x) => x.rid)).size;
-  return { v, T, days, rids };
+  const cs = caseSummary(rows), tracked = cs.some((c) => c.tracked);
+  const jt = cs.filter((c) => c.status === "judge");
+  return { v, T, days, rids, tracked, judges: jt.length, jmed: jt.length ? median(jt.map((c) => c.dms + c.ext)) : 0 };
 }
 function renderCompare(base) {
   const gm = groupMembers();
-  if (!gm) { $("cmp").innerHTML = `<p class="muted">在上方選擇群體（L1／L2）後，這裡會顯示「${esc(curAgent)}」和群體的對比。${Object.keys(ORG).length ? "" : "需要先匯入單位對照表（CSV：email, L1, L2）。"}</p>`; return; }
+  if (!gm) { $("cmp").innerHTML = `<p class="muted">在上方選擇群體（L1／L2／L3）後，這裡會顯示「${esc(curAgent)}」和群體的對比。${Object.keys(ORG).length ? "" : "需要先匯入單位對照表（CSV：email, L1, L2, L3）。"}</p>`; return; }
   const date = $("fDate").value, from = $("fFrom").value, to = $("fTo").value, peers = new Set(gm.filter((a) => a !== curAgent));
   const per = new Map();
   for (const x of ALL) if (peers.has(x.em) && (!date || x.date === date) && inTime(x, from, to)) { if (!per.has(x.em)) per.set(x.em, []); per.get(x.em).push(x); }
   const G = [...per.values()].map(agentMetrics).filter(Boolean);
   const me = agentMetrics(base);
-  const lbl = [$("fL1").value, $("fL2").value].filter(Boolean).join(" / ");
+  const lbl = [$("fL1").value, $("fL2").value, $("fL3").value].filter(Boolean).join(" / ");
   if (!me) { $("cmp").innerHTML = `<p class="muted">${esc(curAgent)} 在目前的篩選條件下沒有資料。</p>`; return; }
   if (!G.length) { $("cmp").innerHTML = `<p class="muted">群體「${esc(lbl)}」（不含本人）在這個範圍沒有其他人的資料。</p>`; return; }
   const sg = (n) => (Math.abs(n) < 1 ? "±0" : (n > 0 ? "+" : "−") + dur(Math.abs(n)));
@@ -431,6 +506,13 @@ function renderCompare(base) {
   const mPer = me.rids ? me.v.work / me.rids : 0, gPer = median(G.filter((m) => m.rids).map((m) => m.v.work / m.rids));
   rows.push(`<tr style="font-weight:600"><td>處理案件數（日均）</td><td class="num">${mCases.toFixed(1)}</td><td class="num">${gCases.toFixed(1)}</td><td class="num d">${(mCases - gCases >= 0 ? "+" : "−") + Math.abs(mCases - gCases).toFixed(1)}</td></tr>`,
     `<tr style="font-weight:600"><td>每件平均工作時間</td><td class="num">${mPer ? dur(mPer) : "-"}</td><td class="num">${gPer ? dur(gPer) : "-"}</td><td class="num d">${mPer && gPer ? sg(mPer - gPer) : "-"}</td></tr>`);
+  const GT = G.filter((m) => m.tracked);
+  if (me.tracked && GT.length) {   // 26.11.11 起才有 Judge 紀錄；只跟同樣有紀錄的人比
+    const mJ = me.judges / me.days, gJ = median(GT.map((m) => m.judges / m.days));
+    const gJm = median(GT.filter((m) => m.judges).map((m) => m.jmed));
+    rows.push(`<tr style="font-weight:600"><td>Judge 件數（日均）</td><td class="num">${mJ.toFixed(1)}</td><td class="num">${gJ.toFixed(1)}</td><td class="num d">${(mJ - gJ >= 0 ? "+" : "−") + Math.abs(mJ - gJ).toFixed(1)}</td></tr>`,
+      `<tr style="font-weight:600"><td>Judge 件處理時間（中位數）</td><td class="num">${me.jmed ? dur(me.jmed) : "-"}</td><td class="num">${gJm ? dur(gJm) : "-"}</td><td class="num d">${me.jmed && gJm ? sg(me.jmed - gJm) : "-"}</td></tr>`);
+  }
   $("cmp").innerHTML = `<p class="muted">個人：${esc(curAgent)}${orgLabel(curAgent) ? "（" + esc(orgLabel(curAgent)) + "）" : ""}；群體：${esc(lbl)}，不含本人共 ${G.length} 位。數字是<b>日均</b>（${date || "全部日期"}），群體取<b>中位數</b>；小字是占比，差異的 pp＝百分點。人數很少時中位數參考性有限。</p>
     <div class="tablewrap" style="max-height:none"><table class="cmp"><thead><tr><th>項目</th><th class="num">個人</th><th class="num">群體</th><th class="num">差異</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
 }
@@ -449,8 +531,9 @@ function buildFilters() {
     .map(([k, v]) => `<label><input type="checkbox" value="${k}" checked> ${v}</label>`).join("");
   for (const id of ["fDate", "fRid", "fHost", "fFrom", "fTo", "fMerge", "fAskMax", "fOffH"]) $(id).oninput = render;
   bindAgentBox();
-  $("fL1").onchange = () => { fillL2(); render(); };
-  $("fL2").onchange = render;
+  $("fL1").onchange = () => { fillL2(); fillL3(); render(); };
+  $("fL2").onchange = () => { fillL3(); render(); };
+  $("fL3").onchange = render;
   $("fDev").onchange = render;
   $("fStates").onchange = render; $("fCats").onchange = render;
 }
@@ -562,7 +645,7 @@ const INTERNAL = ["dms_other", "ih", "bi", "mypage"];
 
 /** L1：工作中／Chrome 外／閒置／沒有紀錄；L2：各 L1 的細項。沒有紀錄＝（每天首尾之間的時間）－（片段涵蓋的時間） */
 function levelStats(rows) {
-  const v = { work: 0, outside: 0, idle: 0, off: 0, gap: 0, span: 0, w: { case: 0, int: 0, gdoc: 0, other: 0 }, i: { page: 0, away: 0 } };
+  const v = { work: 0, outside: 0, idle: 0, off: 0, gap: 0, span: 0, w: { case: 0, int: 0, gdoc: 0, chat: 0, ai: 0, other: 0 }, i: { page: 0, away: 0, lock: 0 } };
   const byDate = {};
   for (const x of rows) (byDate[x.date] ||= []).push(x);
   for (const r of Object.values(byDate)) {
@@ -575,10 +658,11 @@ function levelStats(rows) {
       const d = (x.e - x.s) / 1000;
       if (x.st === "work") {
         v.work += d; const c = x.cat || "other";
-        if (c === "dms_case") v.w.case += d; else if (INTERNAL.includes(c)) v.w.int += d; else if (c.startsWith("g_")) v.w.gdoc += d; else v.w.other += d;
+        if (c === "dms_case") v.w.case += d; else if (INTERNAL.includes(c)) v.w.int += d; else if (c.startsWith("g_")) v.w.gdoc += d;
+        else if (c === "chat") v.w.chat += d; else if (c === "ai") v.w.ai += d; else v.w.other += d;
       } else if (x.st === "outside") v.outside += d;
       else if (x.st === "idle" && x.off) v.off += d;
-      else if (x.st === "idle") { v.idle += d; if (x.cat && x.cat !== "other") v.i.page += d; else v.i.away += d; }
+      else if (x.st === "idle") { v.idle += d; if (x.host === "locked") v.i.lock += d; else if (x.cat && WORK_PAGES.has(x.cat)) v.i.page += d; else v.i.away += d; }
     }
   }
   return v;
@@ -589,9 +673,9 @@ function renderLevels(rows) {
   const v = levelStats(rows), T = v.span - v.off;
   const pct = (a, b) => (b > 0 ? ((a / b) * 100).toFixed(1) + "%" : "-");
   const L = [
-    ["work", "工作中", v.work, "var(--work)", [["DMS 案件頁", v.w.case], ["內部與查詢系統（IH、BI、MyPage、DMS 其他頁）", v.w.int], ["Google 文件", v.w.gdoc], ["其他網站", v.w.other]]],
+    ["work", "工作中", v.work, "var(--work)", [["DMS 案件頁", v.w.case], ["內部與查詢系統（IH、BI、MyPage、DMS 其他頁）", v.w.int], ["Google 文件", v.w.gdoc], ["聊天（SeaTalk 網頁版）", v.w.chat], ["外部 AI（ChatGPT、Gemini 等）", v.w.ai], ["其他網站", v.w.other]]],
     ["outside", "Chrome 外", v.outside, "var(--outside)", []],
-    ["idle", "閒置", v.idle, "var(--idle)", [["停在工作頁面閱讀", v.i.page], ["離開座位／電腦鎖定（含停在其他網站）", v.i.away]]],
+    ["idle", "閒置", v.idle, "var(--idle)", [["停在工作頁面閱讀", v.i.page], ["離開座位（沒動作，含 Chrome 不在前景、停在其他網站）", v.i.away], ["電腦鎖定（26.11.11 起才分得出來）", v.i.lock]]],
     ["gap", "沒有紀錄（電腦睡眠／關閉 Chrome）", v.gap, "var(--nr)", []],
   ];
   const dates = new Set(rows.map((x) => x.date));
@@ -612,8 +696,11 @@ function renderStats(rows) {
   const rids = new Set(rows.filter((x) => x.rid && x.st === "work").map((x) => x.rid)).size;
   const devCount = new Set(rows.map((x) => x.dev)).size;
   const maxTabs = Math.max(0, ...rows.map((x) => x.tabs || 0));
+  const cs = caseSummary(rows), tracked = cs.some((c) => c.tracked);
+  const n = (k) => cs.filter((c) => c.status === k).length;
   $("stats").innerHTML = [
-    ["處理過的案件數", rids], ["最多同時開啟案件頁", maxTabs], ["裝置數", devCount],
+    ["處理過的案件數", rids], ...(tracked ? [["Judge", n("judge")], ["Pending", n("pending")], ["只看過", n("peek")]] : []),
+    ["最多同時開啟案件頁", maxTabs], ["裝置數", devCount],
   ].map(([k, v]) => `<div class="stat"><span class="muted">${k}</span><b>${v}</b></div>`).join("");
 }
 
@@ -621,6 +708,7 @@ function colorOf(x) { if (x.off) return "var(--off)"; return x.st === "work" ? C
 function labelOf(x) {
   if (x.off) return "未上班（連續閒置）";
   if (x.st === "work") return CAT[x.cat] || x.cat || "其他網站";
+  if (x.st === "idle" && x.host === "locked") return "閒置（電腦鎖定）";
   if (x.st === "idle" && x.cat) return `閒置（停在${CAT[x.cat] || x.cat}）`;
   return STATE[x.st];
 }
@@ -637,19 +725,29 @@ function renderStrips(rows) {
     const t0 = toMs(d + " 00:00:00") + startH * 3600e3, t1 = toMs(d + " 00:00:00") + Math.max(endH, startH + 1) * 3600e3;
     const pct = (t) => ((t - t0) / (t1 - t0)) * 100;
     const blocks = r.map((x) => `<div title="${fmtTime(x.s)}～${fmtTime(x.e)}　${esc(labelOf(x))}${x.rid ? " " + x.rid : ""}${x.host ? " " + esc(x.host) : ""}（${dur(x.sec)}）" style="left:${pct(x.s)}%;width:${Math.max(0.15, pct(x.e) - pct(x.s))}%;background:${colorOf(x)}"></div>`).join("");
+    const marks = EVTS.filter((e) => e.em === r[0].em && e.ev === "api" && OP_NAME[e.op] && evtOk(e) && e.t >= t0 && e.t <= t1)
+      .map((e) => `<div class="mk ${e.op}" title="${fmtTime(e.t)}　${esc(evtLabel(e))}${e.rid ? " " + e.rid : ""}" style="left:${pct(e.t)}%"></div>`).join("");
     let ticks = "";
     for (let h = startH; h <= Math.max(endH, startH + 1); h++) ticks += `<span style="left:${pct(t0 + (h - startH) * 3600e3)}%">${h}:00</span>`;
-    html.push(`<div class="daylabel muted">${d}</div><div class="strip">${blocks}</div><div class="axis">${ticks}</div>`);
+    html.push(`<div class="daylabel muted">${d}</div>${marks ? `<div class="mkrow">${marks}</div>` : ""}<div class="strip">${blocks}</div><div class="axis">${ticks}</div>`);
   }
   $("strips").innerHTML = html.join("") || "<span class='muted'>沒有資料</span>";
   const used = new Set(rows.map((x) => (x.st === "work" ? x.cat || "other" : x.st)));
-  $("legend").innerHTML = [...used].map((k) => `<span><i style="background:${COLOR[k]}"></i>${CAT[k] || STATE[k]}</span>`).join("");
+  $("legend").innerHTML = [...used].map((k) => `<span><i style="background:${COLOR[k]}"></i>${CAT[k] || STATE[k]}</span>`).join("") +
+    (EVTS.some((e) => e.em === curAgent && OP_NAME[e.op]) ? `<span><i style="background:#fab005"></i>Pending</span><span><i style="background:#e03131"></i>Judge</span>` : "");
 }
 
 function renderDetail(rows) {
   const out = [];
   let prev = null;
+  // 26.11.11 起：Pending／Judge 等動作插在發生的時間點（排序時不顯示）
+  const evs = sortKey || !rows.length ? [] : EVTS.filter((e) => e.em === rows[0].em && e.ev === "api"
+    && e.t >= rows[0].s - 1000 && e.t <= rows.at(-1).e + 1000 && (!$("fDev").value || e.dev === $("fDev").value));
+  let ei = 0;
+  const evRow = (e) => `<tr class="evt"><td>${fmtTime(e.t)}</td><td colspan="2">⚑ ${esc(evtLabel(e))}</td><td colspan="2">${e.rid ? `<a href="https://dms.cs.shopee.tw/dispute/detail/${e.rid}" target="_blank">${e.rid}</a>` : ""}</td>
+    <td class="muted" colspan="2">${e.btn ? `按鈕「${esc(e.btn)}」` : ""}${e.code != null && !evtOk(e) ? ` <span class="warn">HTTP ${e.code}（失敗）</span>` : ""}</td><td class="muted">${esc(e.dev)}</td><td></td></tr>`;
   for (const x of sortRows(rows)) {
+    while (ei < evs.length && evs[ei].t <= x.s) out.push(evRow(evs[ei++]));
     if (!sortKey && prev && x.s - prev.e > 60000) out.push(`<tr class="gap"><td colspan="9">${fmtTime(prev.e)}～${fmtTime(x.s)} 沒有紀錄（${dur((x.s - prev.e) / 1000)}）</td></tr>`);
     out.push(`<tr><td>${fmtTime(x.s)}</td><td>${fmtTime(x.e)}</td><td class="num">${dur(x.sec)}</td>
       <td><span class="badge" style="background:${colorOf(x)}">${esc(labelOf(x))}</span></td>
@@ -658,6 +756,7 @@ function renderDetail(rows) {
       <td class="num">${x.tabs ?? ""}</td><td class="muted">${esc(x.dev)}</td><td class="muted">${esc(x.ver)}</td></tr>`);
     prev = x;
   }
+  while (ei < evs.length) out.push(evRow(evs[ei++]));
   $("tabDetail").innerHTML = table(["開始", "結束", "時長", "狀態／系統", "RID", "網域／文件", "開啟案件頁數", "裝置", "版本"],
     ["s", "e", "sec", "label", "rid", "host", "tabs", "dev", "ver"], out.join(""));
   bindSort("tabDetail", () => renderDetail(view));
@@ -669,11 +768,16 @@ function sortRows(rows) {
   return [...rows].sort((a, b) => (get(a) > get(b) ? 1 : get(a) < get(b) ? -1 : 0) * sortDir);
 }
 
-/** 案件彙整：A → 外部 → 回到 A 的外部時間算給 A */
+/** 案件彙整：A → 外部 → 回到 A 的外部時間算給 A
+ *  26.11.11 起有 Pending／Judge 紀錄：DMS 處理時間只算到 Judge 為止，並以第一次 Pending 分成「Pending 前／後」；Judge 之後還停在案件頁的時間另列 */
 function caseSummary(rows) {
   const m = new Map();
-  const get = (rid) => m.get(rid) || (m.set(rid, { rid, dms: 0, visits: 0, ext: 0, outside: 0, askOver: 0, other: 0, idle: 0, first: Infinity, last: 0 }), m.get(rid));
+  const em = rows.length ? rows[0].em : "";
+  const ops = caseOps(em);
+  const get = (rid) => m.get(rid) || (m.set(rid, { rid, dms: 0, pre: 0, mid: 0, post: 0, visits: 0, ext: 0, outside: 0, askOver: 0, other: 0, idle: 0,
+    first: Infinity, last: 0, tracked: false, pendAt: null, pendN: 0, reasons: [], judgeAt: null }), m.get(rid));
   const askMax = (Number($("fAskMax").value) || 10) * 60;   // 單次離開到 Chrome 外超過這個秒數，不算詢問時間
+  const ov = (s, e, a, b) => Math.max(0, Math.min(e, b) - Math.max(s, a)) / 1000;
   let lastRid = null, pending = [];
   for (const x of rows) {
     if (x.st === "idle" && !x.off && x.cat === "dms_case" && x.rid) { get(x.rid).idle += x.sec; continue; }   // 停在案件頁沒動作，另計
@@ -687,24 +791,50 @@ function caseSummary(rows) {
         }
       }
       if (lastRid !== x.rid || pending.length) c.visits++;
-      c.dms += x.sec; c.first = Math.min(c.first, x.s); c.last = Math.max(c.last, x.e);
+      const o = ops.get(x.rid), J = o && o.judge != null ? o.judge : Infinity, P = o && o.pend.length ? o.pend[0].t : Infinity;
+      const pre = ov(x.s, x.e, -Infinity, Math.min(P, J)), mid = P < J ? ov(x.s, x.e, P, J) : 0, post = ov(x.s, x.e, J, Infinity);
+      c.pre += pre; c.mid += mid; c.post += post; c.dms += pre + mid;
+      if (verNum(x.ver) >= TRACK_VER) c.tracked = true;
+      c.first = Math.min(c.first, x.s); c.last = Math.max(c.last, x.e);
       lastRid = x.rid; pending = [];
     } else {
       pending.push(x);
     }
   }
+  for (const c of m.values()) {
+    const o = ops.get(c.rid);
+    if (o) {
+      c.tracked = true;
+      c.pendN = o.pend.length; c.pendAt = o.pend.length ? o.pend[0].t : null; c.judgeAt = o.judge;
+      c.reasons = [...new Set(o.pend.map((p) => p.reason).filter((r) => r != null))];
+    }
+    c.status = c.judgeAt != null ? "judge" : c.pendN ? "pending" : c.tracked ? "peek" : "";
+  }
   return [...m.values()].sort((a, b) => b.dms - a.dms);
 }
 
+const STATUS_NAME = { judge: "Judge", pending: "Pending", peek: "只看過" };
+function statusCell(c) { return c.status ? `<span class="st-${c.status}">${STATUS_NAME[c.status]}</span>` : `<span class="muted" title="舊版插件，沒有操作紀錄">—</span>`; }
+
 function renderCases(rows) {
   const list = caseSummary(rows);
+  const hm = (t) => (t == null ? "" : fmtTime(t).slice(0, 5));
   const body = list.map((c) => `<tr><td><a href="https://dms.cs.shopee.tw/dispute/detail/${c.rid}" target="_blank">${c.rid}</a></td>
-    <td class="num">${dur(c.dms)}</td><td class="num">${c.visits}</td><td class="num">${dur(c.ext)}</td>
+    <td>${statusCell(c)}</td>
+    <td class="num">${dur(c.dms)}</td><td class="num">${c.status ? dur(c.pre) : ""}</td><td class="num">${c.pendN ? dur(c.mid) : ""}</td><td class="num muted">${c.post ? dur(c.post) : ""}</td>
+    <td class="num">${c.visits}</td><td class="num">${dur(c.ext)}</td>
     <td class="num">${dur(c.outside)}</td><td class="num muted">${c.askOver ? dur(c.askOver) : ""}</td><td class="num">${dur(c.other)}</td><td class="num">${dur(c.idle)}</td>
-    <td class="num"><b>${dur(c.dms + c.ext)}</b></td><td class="num"><b>${dur(c.dms + c.ext + c.outside)}</b></td>
-    <td>${fmtTime(c.first).slice(0, 5)}</td><td>${fmtTime(c.last).slice(0, 5)}</td></tr>`).join("");
-  $("tabCases").innerHTML = `<p class="muted">外部查詢、中途離開、其他網站：離開案件後又回到同一件案件，中間的時間才算給該案件。中途離開＝這段期間在 Chrome 外（可能是 SeaTalk 詢問，也可能是其他事），單次超過上限的另列「超過上限」。<br>合計（下限）＝DMS 處理＋外部查詢，是確定花在這件案件的時間；合計（上限）＝再加上中途離開，是最多可能花的時間。停在案件頁沒有動作的時間另列「閒置停留」。</p>` +
-    table(["RID", "DMS 處理", "進入次數", "外部查詢", "中途離開", "超過上限", "其他網站", "閒置停留", "合計（下限）", "合計（上限）", "首次", "最後"], null, body || "<tr><td colspan='12' class='muted'>沒有案件頁紀錄</td></tr>");
+    <td class="num"><b>${dur(c.dms + c.ext)}</b></td><td class="num"><b>${dur(c.dms + c.ext + c.outside)}</b></td><td class="num">${dur(c.dms + c.ext + c.outside + c.idle)}</td>
+    <td>${hm(c.first)}</td><td>${c.pendN ? hm(c.pendAt) + (c.pendN > 1 ? ` ×${c.pendN}` : "") + (c.reasons.length ? `<small class="muted" style="display:block">${esc(c.reasons.map(reasonName).join("、"))}</small>` : "") : ""}</td>
+    <td>${hm(c.judgeAt)}</td><td class="num">${c.judgeAt != null && isFinite(c.first) ? dur(Math.max(0, (c.judgeAt - c.first) / 1000)) : ""}</td><td>${hm(c.last)}</td></tr>`).join("");
+  const cnt = (k) => list.filter((c) => c.status === k).length;
+  const tracked = list.some((c) => c.tracked);
+  $("tabCases").innerHTML = `<p class="muted">外部查詢、中途離開、其他網站：離開案件後又回到同一件案件，中間的時間才算給該案件。中途離開＝這段期間在 Chrome 外（可能是 SeaTalk 詢問，也可能是其他事），單次超過上限的另列「超過上限」。<br>
+    合計（下限）＝DMS 處理＋外部查詢，是確定花在這件案件的時間；合計（上限）＝再加上中途離開；含停留上限＝再加上「閒置停留」（停在案件頁但 3 分鐘以上沒動作），是最寬鬆的估計。<br>
+    <b>狀態</b>（26.11.11 起）：Judge＝有送出判決；Pending＝有設定 pending reason、還沒判決；只看過＝打開過但沒有這兩種動作。<b>DMS 處理</b>只算到 Judge 為止，Judge 後還停在頁面的時間列在「判決後停留」；Pending 之後仍會接手處理，所以 Pending 前／後都算在處理時間裡。<b>經過時間</b>＝第一次看到這件 → Judge（同時開多件輪流處理時會被拉長，比較專員請用處理時間）。</p>` +
+    (tracked ? `<p>Judge <b>${cnt("judge")}</b> 件、Pending <b>${cnt("pending")}</b> 件、只看過 <b>${cnt("peek")}</b> 件</p>` : "") +
+    table(["RID", "狀態", "DMS 處理", "Pending 前", "Pending 後", "判決後停留", "進入次數", "外部查詢", "中途離開", "超過上限", "其他網站", "閒置停留", "合計（下限）", "合計（上限）", "含停留上限", "首次", "Pending", "Judge", "經過時間", "最後"], null,
+      body || "<tr><td colspan='20' class='muted'>沒有案件頁紀錄</td></tr>");
 }
 
 /** 專員比較：同一天（或全部日期）所有專員並列，偏離中位數很多的格子標色 */
@@ -719,8 +849,11 @@ function renderAgents() {
     const sum = (f) => rows.filter(f).reduce((a, x) => a + x.sec, 0);
     const cases = caseSummary(rows);
     const lows = cases.map((c) => c.dms + c.ext), highs = cases.map((c) => c.dms + c.ext + c.outside);
+    const st = (k) => cases.filter((c) => c.status === k).length;
+    const jt = cases.filter((c) => c.status === "judge").map((c) => c.dms + c.ext);
     return {
-      em, n: cases.length,
+      em, n: cases.length, judge: cases.some((c) => c.tracked) ? st("judge") : null, pend: cases.some((c) => c.tracked) ? st("pending") : null,
+      peek: cases.some((c) => c.tracked) ? st("peek") : null, jmed: jt.length ? median(jt) : null,
       dms: sum((x) => x.st === "work" && x.cat === "dms_case"),
       low: median(lows), high: median(highs),
       outside: sum((x) => x.st === "outside"),
@@ -731,6 +864,10 @@ function renderAgents() {
   }).filter((a) => a.work + a.outside + a.idle > 0);
   const cols = [
     ["n", "處理案件數", (v) => v, "low"],
+    ["judge", "Judge", (v) => (v == null ? "-" : v), "low"],
+    ["pend", "Pending", (v) => (v == null ? "-" : v), null],
+    ["peek", "只看過", (v) => (v == null ? "-" : v), null],
+    ["jmed", "Judge 件處理時間中位數", (v) => (v == null ? "-" : dur(v)), "high"],
     ["dms", "DMS 案件頁時間", dur, null],
     ["low", "每件中位數（下限）", dur, "high"],
     ["high", "每件中位數（上限）", dur, "high"],
@@ -738,17 +875,17 @@ function renderAgents() {
     ["idle", "閒置", dur, "high"],
     ["other", "其他網站", dur, "high"],
   ];
-  const med = Object.fromEntries(cols.map(([k]) => [k, median(stats.map((a) => a[k]).filter((v) => v > 0))]));
+  const med = Object.fromEntries(cols.map(([k]) => [k, median(stats.map((a) => a[k]).filter((v) => v != null && v > 0))]));
   const flag = (k, v, dir) => {
-    if (!dir || !med[k] || stats.length < 3) return "";
+    if (!dir || !med[k] || stats.length < 3 || v == null) return "";
     if (dir === "high" && v >= med[k] * 1.5) return " style=\"background:rgba(216,24,24,.12);font-weight:600\"";
     if (dir === "low" && v <= med[k] * 0.5) return " style=\"background:rgba(216,24,24,.12);font-weight:600\"";
     return "";
   };
   const body = stats.map((a) => `<tr${a.em === curAgent ? ' class="me"' : ""}><td>${esc(a.em)}${orgLabel(a.em) ? `<small class="muted" style="display:block">${esc(orgLabel(a.em))}</small>` : ""}</td>` + cols.map(([k, , f, dir]) => `<td class="num"${flag(k, a[k], dir)}>${f(a[k])}</td>`).join("") + "</tr>").join("");
   const medRow = `<tr><td class="muted">中位數</td>` + cols.map(([k, , f]) => `<td class="num muted">${med[k] ? f(med[k]) : "-"}</td>`).join("") + "</tr>";
-  $("tabAgents").innerHTML = `<p class="muted">日期：${date || "全部"}（跟著上方日期篩選，不受專員、裝置篩選影響）。${gm ? `只列群體「${esc([$("fL1").value, $("fL2").value].filter(Boolean).join(" / "))}」的 ${agents.length} 位，藍底是目前選的專員。` : ""}偏離所有人中位數很多的格子會標紅：案件數低於一半，或時間高於 1.5 倍；至少 3 位專員才標。</p>` +
-    table(["專員"].concat(cols.map((c) => c[1])), null, (body || "<tr><td colspan='8' class='muted'>沒有資料</td></tr>") + (stats.length ? medRow : ""));
+  $("tabAgents").innerHTML = `<p class="muted">日期：${date || "全部"}（跟著上方日期篩選，不受專員、裝置篩選影響）。${gm ? `只列群體「${esc([$("fL1").value, $("fL2").value, $("fL3").value].filter(Boolean).join(" / "))}」的 ${agents.length} 位，藍底是目前選的專員。` : ""}偏離所有人中位數很多的格子會標紅：案件數低於一半，或時間高於 1.5 倍；至少 3 位專員才標。</p>` +
+    table(["專員"].concat(cols.map((c) => c[1])), null, (body || `<tr><td colspan='${cols.length + 1}' class='muted'>沒有資料</td></tr>`) + (stats.length ? medRow : ""));
 }
 
 const DOC_PATH = { g_sheet: "spreadsheets", g_form: "forms", g_slides: "presentation", g_doc: "document" };
@@ -1075,6 +1212,7 @@ $("days").onchange = () => { if ($("srcSel").value === "drive" && gToken) $("gLo
 const ALIAS_SEG = { s: ["s", "start", "start_time", "started_at", "seg_start"], e: ["e", "end", "end_time", "ended_at", "seg_end"], st: ["st", "state", "status"], cat: ["cat", "category"],
   rid: ["rid"], host: ["host", "domain"], doc: ["doc", "doc_id"], gid: ["gid"], title: ["title", "doc_title"], dev: ["dev", "device"], tabs: ["tabs", "case_tabs"], em: ["em", "email"], ver: ["ver", "version"] };
 const ALIAS_USE = { em: ["em", "email"], dev: ["dev", "device"], date: ["date", "day"], t: ["t", "type"], f: ["f", "feature"], d: ["d", "detail"], n: ["n", "count", "cnt"] };
+const ALIAS_CASE = { em: ["em"], dev: ["dev"], ev: ["ev"], op: ["op"], rid: ["rid"], t: ["t"], m: ["m"], p: ["p"], code: ["code"], btn: ["btn"], a: ["a"] };
 
 function dbRows(db, table, alias, timeKey, days) {
   const info = db.exec(`PRAGMA table_info(${table})`)[0];
@@ -1102,6 +1240,8 @@ async function loadDbBuffer(buf, days, note = "") {
   SQLP ||= await initSqlJs({ locateFile: (f) => CFG.sqlJs + f });
   const db = new SQLP.Database(new Uint8Array(buf));
   try {
+    EVTS = [];
+    try { if (db.exec("SELECT 1 FROM sqlite_master WHERE name='case_events'")[0]) EVTS = normEvts(dbRows(db, "case_events", ALIAS_CASE, "t", days)); } catch (_) {}
     const segs = dbRows(db, "activity_segments", ALIAS_SEG, "s", days);
     loadSegs(segs, `已讀取${days ? `最近 ${days} 天` : "全部"}` + note, 0);
     try { loadUsage(dbRows(db, "usage_counts", ALIAS_USE, "date", days)); } catch (e) { setMsg($("msg").textContent + `；功能使用未載入：${e.message}`); }
