@@ -117,23 +117,18 @@ tr.me td{background:rgba(79,142,247,.14)}
   </div>
   <div class="row" id="srcRow">
     <label>資料來源 <select id="srcSel">
-      <option value="drive">Google Drive（.db 檔案）</option>
-      <option value="mypage">MyPage（排程上傳檔）</option>
-      <option value="firebase">Firebase（尚未收走的資料）</option>
+      <option value="drive">Google Drive（排程產生的報表檔）</option>
       <option value="local">本機檔案（.db／.json）</option>
+      <option value="firebase">Firebase（尚未收走的資料，即時測試用）</option>
     </select></label>
     <label id="daysWrap">載入最近 <select id="days"><option>1</option><option>3</option><option selected>7</option><option>14</option><option>30</option><option value="90">90</option></select> 天</label>
     <span id="msg" class="muted"></span>
   </div>
   <div class="row srcbar hide" id="driveBar">
     <input id="gClient" size="40" placeholder="OAuth Client ID（xxx.apps.googleusercontent.com）">
-    <input id="gFile" size="30" placeholder="檔案連結或 ID（留空＝依檔名搜尋）">
+    <input id="gFile" size="30" placeholder="（選填）.db 檔案連結或 ID：直接讀完整資料庫">
     <button class="primary" id="gLoad">登入 Google 並載入</button>
     <span id="gWho" class="muted"></span>
-  </div>
-  <div class="row srcbar hide" id="mpBar">
-    <span class="muted">資料更新時間：<span id="mpGen">-</span></span>
-    <button class="primary" id="mpReload">載入</button>
   </div>
   <div class="row srcbar hide" id="fbBar">
     <input id="dbUrl" size="44" value="https://rr-dynamic-data-default-rtdb.firebaseio.com">
@@ -171,6 +166,15 @@ tr.me td{background:rgba(79,142,247,.14)}
     </div>
     <div class="row chips" id="fStates" style="margin-top:8px"></div>
     <div class="row chips" id="fCats" style="margin-top:6px"></div>
+  </div>
+
+  <div class="card hide" id="periodCard">
+    <h2>期間彙總</h2>
+    <div class="row">
+      <label>日期 <select id="pFrom"></select></label> ～ <select id="pTo"></select>
+      <span class="muted" id="pInfo"></span>
+    </div>
+    <div class="tablewrap" id="period" style="margin-top:8px"></div>
   </div>
 
   <div class="card">
@@ -255,6 +259,7 @@ const WORK_PAGES = new Set(["dms_case", "dms_other", "ih", "bi", "mypage", "g_sh
 const PENDING_REASON = { 21: "法務確認" };
 const $ = (id) => document.getElementById(id);
 let ALL = [];          // 所有片段
+let SUMMARY = null, DAY = null;   // Drive 按日模式（見「資料來源」）
 let EVTS = [];         // 案件操作紀錄（26.11.11 起）：{ em, dev, ev, op, rid, t, m, p, code, btn, a }
 let view = [];         // 篩選後
 let sortKey = null, sortDir = 1;
@@ -274,6 +279,7 @@ $("loadBtn").onclick = async () => {
     localStorage.setItem("actViewerDb", base);
   } catch (_) {}
   setMsg("讀取中…");
+  leaveDayMode();
   try {
     const res = await fetch(`${base}/activity_inbox.json` + (secret ? `?auth=${encodeURIComponent(secret)}` : ""));
     const text = await res.text();
@@ -293,9 +299,10 @@ $("loadBtn").onclick = async () => {
 $("fileInput").onchange = async (e) => {
   const f = e.target.files[0]; if (!f) return;
   try {
-    if (/\.(db|sqlite3?)$/i.test(f.name)) { setMsg("讀取資料庫…"); await loadDbBuffer(await f.arrayBuffer(), 0); return; }
+    if (/\.(db|sqlite3?)$/i.test(f.name)) { setMsg("讀取資料庫…"); leaveDayMode(); await loadDbBuffer(await f.arrayBuffer(), Number($("days").value) || 7); return; }
     const data = JSON.parse(await f.text());
     if (data.case_inbox) EVTS = evtsFromBatches(data.case_inbox);
+    leaveDayMode();
     ingest(data.activity_inbox || (data.usage_inbox ? {} : data));   // 可匯入整個資料庫或只匯出 activity_inbox
     if (data.usage_inbox) ingestUsage(data.usage_inbox);
   } catch (err) { setMsg("檔案格式錯誤：" + err.message); }
@@ -306,7 +313,7 @@ function setMsg(t) { $("msg").textContent = t; }
 const toMs = (s) => Date.parse(String(s).replace(" ", "T") + "+08:00");
 const anyMs = (v) => typeof v === "number" ? (v < 1e12 ? v * 1000 : v)
   : /(Z|[+-]\d\d:?\d\d)$/i.test(String(v).trim()) ? Date.parse(String(v).replace(" ", "T")) : toMs(v);
-const fmtDate = (ms) => new Date(ms).toLocaleDateString("sv-SE", { timeZone: "Asia/Taipei" });
+const fmtDate = (ms) => new Date(ms + 8 * 3600e3).toISOString().slice(0, 10);   // 台北日期（台灣沒有日光節約，直接 +8 小時；比 toLocaleDateString 快很多）
 
 /** 案件操作紀錄：一批一批的格式 → 一筆一筆 */
 function evtsFromBatches(data) {
@@ -366,7 +373,7 @@ function ingest(data) {   // Firebase／JSON：一批一批的格式
   loadSegs(rows, `已讀取 ${batches} 批`, skipped);
 }
 
-function loadSegs(rows, label, skipped = 0) {
+function loadSegs(rows, label, skipped = 0, keep = false) {
   ALL = [];
   for (const x of rows) {
     const s = anyMs(x.s), e = anyMs(x.e);
@@ -377,8 +384,8 @@ function loadSegs(rows, label, skipped = 0) {
   ALL.sort((a, b) => a.em.localeCompare(b.em) || a.s - b.s);
   if (EVTS.length && !Number.isFinite(EVTS[0].t)) EVTS = normEvts(EVTS);
   setMsg(`${label}、${ALL.length} 個片段` + (EVTS.length ? `、${EVTS.length} 筆案件操作` : "") + (skipped ? `（略過 ${skipped} 筆格式不完整的資料）` : ""));
-  if (!ALL.length) { $("app").classList.add("hide"); return; }
-  buildFilters();
+  if (!ALL.length && !keep) { $("app").classList.add("hide"); return; }
+  if (!keep) buildFilters(); else fillDevs();
   $("app").classList.remove("hide");
   render();
 }
@@ -392,7 +399,8 @@ const orgLabel = (em) => { const o = orgOf(em); return o ? [o.l1, o.l2, o.l3].fi
 function setAgent(v) {
   $("fAgent").value = v;
   if (v === curAgent) return;
-  curAgent = v; fillDates(); render();
+  curAgent = v; fillDates();
+  if (DAY) showDay($("fDate").value); else render();
 }
 function bindAgentBox() {
   const ag = $("fAgent");
@@ -519,7 +527,7 @@ function renderCompare(base) {
 
 // ---------- 篩選 ----------
 function buildFilters() {
-  const agents = [...new Set(ALL.map((x) => x.em))].sort();
+  const agents = DAY ? [...new Set(SUMMARY.rows.map((r) => r.em))].sort() : [...new Set(ALL.map((x) => x.em))].sort();
   AGENTS = agents;
   if (!agents.includes(curAgent)) curAgent = agents[0] || "";
   $("fAgent").value = curAgent;
@@ -530,6 +538,7 @@ function buildFilters() {
   $("fCats").innerHTML = "<span class='muted'>系統</span>" + Object.entries(CAT)
     .map(([k, v]) => `<label><input type="checkbox" value="${k}" checked> ${v}</label>`).join("");
   for (const id of ["fDate", "fRid", "fHost", "fFrom", "fTo", "fMerge", "fAskMax", "fOffH"]) $(id).oninput = render;
+  $("fDate").oninput = () => (DAY ? showDay($("fDate").value) : render());   // Drive 按日模式：換日期要下載那天的檔案
   bindAgentBox();
   $("fL1").onchange = () => { fillL2(); fillL3(); render(); };
   $("fL2").onchange = () => { fillL3(); render(); };
@@ -540,11 +549,23 @@ function buildFilters() {
 
 function fillDates() {
   const em = curAgent;
-  const devs = [...new Set(ALL.filter((x) => x.em === em).map((x) => x.dev))].sort();
-  $("fDev").innerHTML = `<option value="">全部裝置（${devs.length} 台）</option>` + devs.map((d) => `<option>${esc(d)}</option>`).join("");
+  if (DAY) {   // Drive 按日模式：日期來自彙總檔（有每日檔的才列），一次看一天；換專員時盡量停在同一天
+    const keep = $("fDate").value, files = new Set(SUMMARY.day_files || []);
+    const dates = [...new Set(SUMMARY.rows.filter((r) => r.em === em && files.has(r.d)).map((r) => r.d))].sort().reverse();
+    $("fDate").innerHTML = dates.map((d) => `<option>${d}</option>`).join("") || `<option value="">（沒有每日檔）</option>`;
+    if (dates.includes(keep)) $("fDate").value = keep;
+    fillDevs();
+    return;
+  }
+  fillDevs();
   const dates = [...new Set(ALL.filter((x) => x.em === em).map((x) => x.date))].sort().reverse();
   $("fDate").innerHTML = `<option value="">全部日期</option>` + dates.map((d) => `<option>${d}</option>`).join("");
   if (dates.length) $("fDate").value = dates[0];
+}
+function fillDevs() {
+  const devs = [...new Set(ALL.filter((x) => x.em === curAgent).map((x) => x.dev))].sort(), keep = $("fDev").value;
+  $("fDev").innerHTML = `<option value="">全部裝置（${devs.length} 台）</option>` + devs.map((d) => `<option>${esc(d)}</option>`).join("");
+  if (devs.includes(keep)) $("fDev").value = keep;
 }
 
 function checked(id) { return new Set([...$(id).querySelectorAll("input:checked")].map((i) => i.value)); }
@@ -586,6 +607,13 @@ function markOff() {
   const h = Number($("fOffH").value);
   OFFRUNS = []; for (const x of ALL) x.off = false;
   if (!(h > 0)) return;
+  if (DAY && DAY.cur && h === DAY.cur.offH) {   // 排程已用完整前後天資料算好（跨午夜的閒置也判斷得出來）
+    OFFRUNS = DAY.cur.offruns;
+    const by = new Map();
+    for (const o of OFFRUNS) { const k = o.em + "|" + o.dev; if (!by.has(k)) by.set(k, []); by.get(k).push(o); }
+    for (const x of ALL) if (x.st === "idle") { const rs = by.get(x.em + "|" + x.dev); if (rs && rs.some((o) => x.s >= o.s && x.e <= o.e)) x.off = true; }
+    return;
+  }
   const lim = h * 3600e3, tol = 5 * 60e3, groups = new Map();
   for (const x of ALL) { const k = x.em + "|" + x.dev; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(x); }
   for (const arr of groups.values()) {
@@ -623,6 +651,7 @@ function renderShift() {
 }
 
 function render() {
+  if (DAY) renderPeriod();
   markOff();
   renderShift();
   const { base, shown } = applyFilters();
@@ -741,7 +770,7 @@ function renderDetail(rows) {
   const out = [];
   let prev = null;
   // 26.11.11 起：Pending／Judge 等動作插在發生的時間點（排序時不顯示）
-  const evs = sortKey || !rows.length ? [] : EVTS.filter((e) => e.em === rows[0].em && e.ev === "api"
+  const evs = sortKey || !rows.length ? [] : EVTS.filter((e) => e.em === rows[0].em && e.ev === "api" && OP_NAME[e.op]
     && e.t >= rows[0].s - 1000 && e.t <= rows.at(-1).e + 1000 && (!$("fDev").value || e.dev === $("fDev").value));
   let ei = 0;
   const evRow = (e) => `<tr class="evt"><td>${fmtTime(e.t)}</td><td colspan="2">⚑ ${esc(evtLabel(e))}</td><td colspan="2">${e.rid ? `<a href="https://dms.cs.shopee.tw/dispute/detail/${e.rid}" target="_blank">${e.rid}</a>` : ""}</td>
@@ -1121,7 +1150,7 @@ $("csvBtn").onclick = () => {
 };
 
 // ---------- 工具 ----------
-function fmtTime(ms) { return new Date(ms).toLocaleTimeString("sv-SE", { timeZone: "Asia/Taipei", hour12: false }); }
+function fmtTime(ms) { return new Date(ms + 8 * 3600e3).toISOString().slice(11, 19); }   // 台北時間 HH:MM:SS
 function dur(sec) {
   sec = Math.round(sec);
   const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
@@ -1134,7 +1163,9 @@ function csvCell(v) { v = String(v ?? ""); return /[",\n]/.test(v) ? `"${v.repla
 const CFG = {
   clientId: "475232656776-9t12v9cf2lo5kl96gm67eghsfilbnpvm.apps.googleusercontent.com",          // 部署時可直接填 OAuth Client ID（xxx.apps.googleusercontent.com），留空則在畫面上輸入
   allowedEmail: "chris.chouyh@shopee.com",      // 填你的 Google 帳號：登入的不是這個帳號就擋下來（只是多一層提示，真正的保護是 Drive 權限與 OAuth 測試使用者）
-  fileName: "rrh_activity.db",
+  fileName: "rrh_activity.db",       // 完整資料庫（備用：沒有報表檔、或要看多天原始片段時）
+  summaryFile: "rrh_summary.json.gz", // 排程產生：每人每天的彙總
+  usageFile: "rrh_usage.json.gz",     // 排程產生：功能使用
   orgFile: "rrh_org.csv",   // 單位對照表（email, L1, L2），放在同一個 Drive 帳號底下就會自動載入
   sqlJs: "https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/",
 };
@@ -1143,11 +1174,12 @@ const loadExt = (src) => new Promise((ok, ng) => {
 });
 
 function setSource(v) {
+  if (!["drive", "local", "firebase"].includes(v)) v = "drive";
   store("rrhViewerSrc", v); $("srcSel").value = v;
-  for (const [k, id] of [["drive", "driveBar"], ["mypage", "mpBar"], ["firebase", "fbBar"], ["local", "localBar"]]) $(id).classList.toggle("hide", k !== v);
-  $("daysWrap").classList.toggle("hide", !(v === "drive" || v === "mypage"));
-  if (v === "drive") { loadExt("https://accounts.google.com/gsi/client").catch(() => {}); loadExt(CFG.sqlJs + "sql-wasm.js").catch(() => {}); }   // 先載入，登入彈窗才不會被瀏覽器擋
-  if (v === "mypage") mpLoad();
+  for (const [k, id] of [["drive", "driveBar"], ["firebase", "fbBar"], ["local", "localBar"]]) $(id).classList.toggle("hide", k !== v);
+  $("daysWrap").classList.toggle("hide", v !== "local");   // 只有讀完整 .db 時才需要限制天數
+  if (v !== "drive") leaveDayMode();
+  if (v === "drive") loadExt("https://accounts.google.com/gsi/client").catch(() => {});   // 先載入，登入彈窗才不會被瀏覽器擋
 }
 $("srcSel").onchange = () => setSource($("srcSel").value);
 
@@ -1188,25 +1220,148 @@ $("gLoad").onclick = async () => {
     if (CFG.allowedEmail && who.emailAddress !== CFG.allowedEmail) { gToken = null; throw new Error(`這個帳號（${who.emailAddress}）沒有使用權限`); }
     $("gWho").textContent = who.emailAddress || "";
     store("rrhGFile", $("gFile").value.trim());
-    let id = driveId($("gFile").value), note = "";
-    if (!id) {
-      setMsg(`搜尋 ${CFG.fileName}…`);
-      const q = encodeURIComponent(`name='${CFG.fileName}' and trashed=false`);
-      const list = (await (await gfetch(`https://www.googleapis.com/drive/v3/files?q=${q}&orderBy=modifiedTime desc&fields=files(id,name,modifiedTime)&supportsAllDrives=true&includeItemsFromAllDrives=true`)).json()).files || [];
-      if (!list.length) throw new Error(`Drive 裡找不到 ${CFG.fileName}（也可以直接貼上檔案連結）`);
-      id = list[0].id; note = `（資料庫更新於 ${new Date(list[0].modifiedTime).toLocaleString("sv-SE", { timeZone: "Asia/Taipei" })}）`;
+    loadOrgFromDrive();
+    const id = driveId($("gFile").value);
+    if (!id) {   // 預設：排程產生的報表檔（先讀彙總，點到某天才下載那天）
+      setMsg(`讀取 ${CFG.summaryFile}…`);
+      const sum = await driveJson(CFG.summaryFile);
+      if (sum) {
+        driveJson(CFG.usageFile).then((u) => u && loadUsage(u.data.rows.map((r) => Object.fromEntries(u.data.cols.map((c, i) => [c, r[i]]))))).catch(() => {});
+        await enterDayMode(sum.data, sum.meta);
+        return;
+      }
+      setMsg(`Drive 裡找不到 ${CFG.summaryFile}（排程還沒產生？），改讀完整資料庫 ${CFG.fileName}…`);
     }
-    setMsg("下載資料庫…");
-    const buf = await (await gfetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media&supportsAllDrives=true`)).arrayBuffer();
-    await loadDbBuffer(buf, Number($("days").value) || 7, note);
-    try {   // 單位對照表（選用）：找不到就維持畫面上匯入的版本
-      const q2 = encodeURIComponent(`name='${CFG.orgFile}' and trashed=false`);
-      const o = (await (await gfetch(`https://www.googleapis.com/drive/v3/files?q=${q2}&orderBy=modifiedTime desc&fields=files(id)&supportsAllDrives=true&includeItemsFromAllDrives=true`)).json()).files || [];
-      if (o.length) setOrg(parseOrg(await (await gfetch(`https://www.googleapis.com/drive/v3/files/${o[0].id}?alt=media&supportsAllDrives=true`)).text()));
-    } catch (_) {}
+    await driveLoadDb(id);
   } catch (e) { setMsg("讀取失敗：" + e.message); }
 };
-$("days").onchange = () => { if ($("srcSel").value === "drive" && gToken) $("gLoad").click(); };
+
+/** 備用：直接下載整個 .db（檔案很大，只載入最近 N 天） */
+async function driveLoadDb(id) {
+  let note = "";
+  if (!id) {
+    const f = await driveFind(CFG.fileName);
+    if (!f) throw new Error(`Drive 裡找不到 ${CFG.fileName}（也可以直接貼上檔案連結）`);
+    id = f.id; note = `（資料庫更新於 ${new Date(f.modifiedTime).toLocaleString("sv-SE", { timeZone: "Asia/Taipei" })}）`;
+  }
+  setMsg("下載資料庫…");
+  const buf = await (await gfetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media&supportsAllDrives=true`)).arrayBuffer();
+  leaveDayMode();
+  await loadDbBuffer(buf, Number($("days").value) || 7, note);
+}
+
+async function loadOrgFromDrive() {   // 單位對照表（選用）：找不到就維持畫面上匯入的版本
+  try {
+    const o = await driveFind(CFG.orgFile);
+    if (o) setOrg(parseOrg(await (await gfetch(`https://www.googleapis.com/drive/v3/files/${o.id}?alt=media&supportsAllDrives=true`)).text()));
+  } catch (_) {}
+}
+
+/** 依檔名找 Drive 上最新的一個檔案 */
+async function driveFind(name) {
+  const q = encodeURIComponent(`name='${name}' and trashed=false`);
+  const list = (await (await gfetch(`https://www.googleapis.com/drive/v3/files?q=${q}&orderBy=modifiedTime desc&pageSize=1&fields=files(id,name,modifiedTime)&supportsAllDrives=true&includeItemsFromAllDrives=true`)).json()).files || [];
+  return list[0] || null;
+}
+async function gunzipJson(buf) {
+  const stream = new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return JSON.parse(await new Response(stream).text());
+}
+/** 下載並解壓 .json.gz；找不到回傳 null */
+async function driveJson(name) {
+  const f = await driveFind(name);
+  if (!f) return null;
+  const buf = await (await gfetch(`https://www.googleapis.com/drive/v3/files/${f.id}?alt=media&supportsAllDrives=true`)).arrayBuffer();
+  return { data: await gunzipJson(buf), meta: f };
+}
+
+// ----- Drive 按日模式：彙總檔（所有日期）＋ 每日原始檔（點到哪天才下載，最多暫存 4 天）-----
+async function enterDayMode(sum, meta) {
+  SUMMARY = sum; DAY = { cache: new Map(), cur: null };
+  ALL = []; EVTS = [];
+  buildFilters();
+  const dates = [...new Set(SUMMARY.rows.map((r) => r.d))].sort();
+  const opt = (d) => `<option>${d}</option>`;
+  $("pFrom").innerHTML = dates.map(opt).join(""); $("pTo").innerHTML = dates.map(opt).join("");
+  $("pTo").value = dates.at(-1) || "";
+  $("pFrom").value = dates.filter((d) => d >= fmtDate(toMs((dates.at(-1) || "2000-01-01") + " 00:00:00") - 6 * 86400e3))[0] || dates[0] || "";
+  $("pFrom").onchange = $("pTo").onchange = renderPeriod;
+  $("periodCard").classList.remove("hide");
+  $("app").classList.remove("hide");
+  setMsg(`彙總檔：${SUMMARY.rows.length} 筆（${dates.length} 天、${AGENTS.length} 人），排程更新於 ${SUMMARY.generated_at || meta.modifiedTime}`);
+  await showDay($("fDate").value);
+}
+function leaveDayMode() {
+  if (!DAY) return;
+  SUMMARY = null; DAY = null;
+  $("periodCard").classList.add("hide");
+}
+async function showDay(date) {
+  if (!DAY || !date) { render(); return; }
+  let day = DAY.cache.get(date);
+  if (!day) {
+    setMsg(`下載 ${date} 的原始資料…`);
+    let r;
+    try { r = await driveJson(`rrh_day_${date}.json.gz`); } catch (e) { setMsg(`下載 ${date} 失敗：${e.message}`); return; }
+    if (!r) { setMsg(`Drive 上找不到 rrh_day_${date}.json.gz`); return; }
+    const o = r.data, ci = Object.fromEntries(o.cols.map((c, i) => [c, i]));
+    day = {
+      segs: o.segs.map((a) => Object.fromEntries(o.cols.map((c, i) => [c, a[i]]))),
+      evts: o.evts || [],
+      offruns: (o.offruns || []).map(([em, dev, s, e]) => ({ em, dev, s: s * 1000, e: e * 1000 })),
+      offH: o.off_hours,
+    };
+    DAY.cache.set(date, day);
+    if (DAY.cache.size > 4) DAY.cache.delete(DAY.cache.keys().next().value);
+  }
+  if (!DAY) return;
+  DAY.cur = day;
+  EVTS = normEvts(day.evts);
+  loadSegs(day.segs, `${date}：`, 0, true);
+}
+
+/** 期間彙總（彙總檔）：每人日均，群體篩選跟上方 L1／L2／L3 一樣；整天只有閒置（電腦沒關）的日子不算 */
+function renderPeriod() {
+  if (!SUMMARY) return;
+  const from = $("pFrom").value, to = $("pTo").value, gm = groupMembers(), gset = gm && new Set(gm);
+  const by = new Map();
+  for (const r of SUMMARY.rows) {
+    if (r.d < from || r.d > to || (gset && !gset.has(r.em)) || !(r.work + r.out > 0)) continue;
+    if (!by.has(r.em)) by.set(r.em, []);
+    by.get(r.em).push(r);
+  }
+  const sum = (rs, k) => rs.reduce((a, r) => a + (r[k] || 0), 0);
+  const stats = [...by.entries()].map(([em, rs]) => {
+    const n = rs.length, tr = rs.filter((r) => r.tr), a = (k) => sum(rs, k) / n, at = (k) => (tr.length ? sum(tr, k) / tr.length : null);
+    const rids = sum(rs, "rids");
+    return { em, days: n, T: a("T"), work: a("work"), wc: a("wc"), wi: a("wi"), wg: a("wg"), wh: a("wh"), wa: a("wa"), wo: a("wo"), out: a("out"), idle: a("idle"),
+      rids: rids / n, per: rids ? sum(rs, "work") / rids : null, j: at("j"), p: at("p"), pk: at("pk"),
+      jm: tr.length ? median(tr.filter((r) => r.j).map((r) => r.jm)) || null : null, on: median(rs.map((r) => r.on).filter(Boolean).map((t) => +t.slice(0, 2) * 60 + +t.slice(3))) };
+  }).sort((a, b) => a.em.localeCompare(b.em));
+  const n1 = (v) => (v == null ? "-" : v.toFixed(1)), dd = (v) => (v == null ? "-" : dur(v));
+  const hm = (m) => (m ? `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(Math.round(m % 60)).padStart(2, "0")}` : "-");
+  const cols = [
+    ["days", "天數", (v) => v, null], ["on", "上班（中位數）", hm, null], ["T", "在線", dd, null], ["work", "工作中", dd, null],
+    ["wc", "DMS 案件頁", dd, null], ["wi", "內部查詢", dd, null], ["wg", "Google 文件", dd, null], ["wh", "聊天", dd, null], ["wa", "外部 AI", dd, null], ["wo", "其他網站", dd, "high"],
+    ["out", "Chrome 外", dd, "high"], ["idle", "閒置", dd, "high"],
+    ["rids", "案件數", n1, "low"], ["per", "每件平均工作時間", dd, "high"], ["j", "Judge", n1, "low"], ["p", "Pending", n1, null], ["pk", "只看過", n1, null], ["jm", "Judge 件處理時間", dd, "high"],
+  ];
+  const med = Object.fromEntries(cols.map(([k]) => [k, median(stats.map((a) => a[k]).filter((v) => v != null && v > 0))]));
+  const flag = (k, v, dir) => {
+    if (!dir || !med[k] || stats.length < 3 || v == null) return "";
+    if ((dir === "high" && v >= med[k] * 1.5) || (dir === "low" && v <= med[k] * 0.5)) return ' style="background:rgba(216,24,24,.12);font-weight:600"';
+    return "";
+  };
+  const body = stats.map((a) => `<tr${a.em === curAgent ? ' class="me"' : ""}><td><a href="#" data-em="${esc(a.em)}">${esc(a.em)}</a>${orgLabel(a.em) ? `<small class="muted" style="display:block">${esc(orgLabel(a.em))}</small>` : ""}</td>` +
+    cols.map(([k, , f, dir]) => `<td class="num"${flag(k, a[k], dir)}>${f(a[k])}</td>`).join("") + "</tr>").join("");
+  const medRow = `<tr><td class="muted">中位數</td>` + cols.map(([k, , f]) => `<td class="num muted">${med[k] ? f(med[k]) : "-"}</td>`).join("") + "</tr>";
+  const lbl = [$("fL1").value, $("fL2").value, $("fL3").value].filter(Boolean).join(" / ");
+  $("pInfo").textContent = `${stats.length} 位${lbl ? `（群體「${lbl}」）` : ""}`;
+  $("period").innerHTML = `<p class="muted">每個數字都是<b>日均</b>（只算有上班的日子；整天只有閒置、電腦沒關的日子不算）。Judge／Pending／只看過只算 26.11.11 以後有紀錄的日子。未上班門檻固定 ${SUMMARY.off_hours} 小時、中途離開上限 ${SUMMARY.ask_max_min} 分鐘（排程計算時的設定）。偏離中位數很多的格子標紅（低於一半或高於 1.5 倍）。點專員可以看他的明細。</p>` +
+    table(["專員"].concat(cols.map((c) => c[1])), null, (body || `<tr><td colspan="${cols.length + 1}" class="muted">這個期間沒有資料</td></tr>`) + (stats.length ? medRow : ""));
+  $("period").querySelectorAll("a[data-em]").forEach((el) => (el.onclick = (e) => { e.preventDefault(); setAgent(el.dataset.em); }));
+}
+
 
 // ----- SQLite（Drive 下載或本機檔案）-----
 const ALIAS_SEG = { s: ["s", "start", "start_time", "started_at", "seg_start"], e: ["e", "end", "end_time", "ended_at", "seg_end"], st: ["st", "state", "status"], cat: ["cat", "category"],
@@ -1248,38 +1403,9 @@ async function loadDbBuffer(buf, days, note = "") {
   } finally { db.close(); }
 }
 
-// ----- MyPage：同一個資料夾有 rrh_index.js 時，讀排程產生的每日檔案（MyPage 擋 fetch，所以用 <script> 載入）-----
-window.__rrh = window.__rrh || {};
-function mpScript(name) {
-  const href = location.href.replace(/[?#].*$/, "");
-  const dir = /\.html?$/i.test(href) || href.endsWith("/") ? href : href + "/";   // 網址結尾沒有「/」時先補上
-  return new Promise((resolve, reject) => {
-    const key = name.replace(/\.js$/, ""), el = document.createElement("script");
-    el.src = new URL(name, dir).href + "?t=" + Date.now();
-    el.onload = () => { el.remove(); key in window.__rrh ? resolve(window.__rrh[key]) : reject(new Error("檔案內容不正確")); };
-    el.onerror = () => { el.remove(); reject(new Error("載入失敗")); };
-    document.head.appendChild(el);
-  });
-}
-async function mpLoad() {
-  let idx;
-  try { idx = await mpScript("rrh_index.js"); }
-  catch (e) { setMsg(`讀不到 rrh_index.js（${e.message}）。MyPage 來源只能在 MyPage 網頁上使用，這裡請改選其他來源`); return; }
-  $("mpGen").textContent = idx.generated_at || "-";
-  const dates = (idx.dates || []).slice(-(Number($("days").value) || 7));
-  setMsg("讀取中…");
-  const merged = {};
-  await Promise.all(dates.map(async (d) => {
-    try { for (const [k, v] of Object.entries((await mpScript((idx.files || {})[d])) || {})) merged[d + "|" + k] = v; } catch (_) {}   // 同一批可能跨日，加上日期避免互蓋
-  }));
-  ingest(merged);
-  try { ingestUsage(await mpScript(idx.usage_file || "rrh_usage.js")); } catch (_) {}
-}
-$("mpReload").onclick = mpLoad;
+if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
 
-if ("serviceWorker" in navigator && location.protocol === "https:" && !location.hostname.includes("mypage")) navigator.serviceWorker.register("sw.js").catch(() => {});
-
-setSource(location.hostname.includes("mypage") ? "mypage" : store("rrhViewerSrc") || (location.protocol === "file:" ? "firebase" : "drive"));
+setSource(store("rrhViewerSrc") || (location.protocol === "file:" ? "local" : "drive"));
 </script>
 </body>
 </html>
