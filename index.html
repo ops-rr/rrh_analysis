@@ -995,8 +995,8 @@ function csvCell(v) { v = String(v ?? ""); return /[",\n]/.test(v) ? `"${v.repla
 
 // ---------- 資料來源 ----------
 const CFG = {
-  clientId: "",          // 部署時可直接填 OAuth Client ID（xxx.apps.googleusercontent.com），留空則在畫面上輸入
-  allowedEmail: "",      // 填你的 Google 帳號：登入的不是這個帳號就擋下來（只是多一層提示，真正的保護是 Drive 權限與 OAuth 測試使用者）
+  clientId: "475232656776-9t12v9cf2lo5kl96gm67eghsfilbnpvm.apps.googleusercontent.com",          // 部署時可直接填 OAuth Client ID（xxx.apps.googleusercontent.com），留空則在畫面上輸入
+  allowedEmail: "chris.chouyh@shopee.com",      // 填你的 Google 帳號：登入的不是這個帳號就擋下來（只是多一層提示，真正的保護是 Drive 權限與 OAuth 測試使用者）
   fileName: "rrh_activity.db",
   orgFile: "rrh_org.csv",   // 單位對照表（email, L1, L2），放在同一個 Drive 帳號底下就會自動載入
   sqlJs: "https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/",
