@@ -38,8 +38,12 @@ th,td{border-bottom:1px solid var(--line);padding:5px 8px;text-align:left;white-
 th{position:sticky;top:0;background:var(--card);cursor:pointer}
 td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 tr.gap td{background:var(--gap);color:var(--muted);font-style:italic}
-tr.evt td{background:rgba(250,176,5,.13);font-weight:600}
+tr.evt td{background:rgba(250,176,5,.10)}
 .mkrow{position:relative;height:12px;margin-top:2px}
+.tl{margin:2px 0 6px 22px;border-left:2px solid var(--line);padding-left:16px;white-space:normal}
+.tl div{margin:5px 0}.tl i.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin:0 6px 0 -21px;background:var(--idle)}
+.tl .wait{color:var(--muted)}.tag{font-size:12px;border:1px solid var(--line);border-radius:4px;padding:0 5px;margin-left:6px;color:var(--muted)}
+tr.open td{background:rgba(79,142,247,.10)}
 .mkrow div{position:absolute;top:0;width:3px;height:12px;margin-left:-1px;border-radius:2px;background:#fab005}
 .mkrow div.judge{background:#e03131}
 .st-judge{color:#e03131;font-weight:700}.st-pending{color:#f08c00;font-weight:700}.st-peek{color:var(--muted)}
@@ -177,6 +181,27 @@ tr.me td{background:rgba(79,142,247,.14)}
     <div class="tablewrap" id="period" style="margin-top:8px"></div>
   </div>
 
+  <div class="card hide" id="casesCard">
+    <h2>案件歷程（依案件）</h2>
+    <div id="casesLoadRow" class="row"><button class="primary" id="casesLoad">載入案件資料</button><span class="muted">最近一段時間第一次被打開的案件（排程設定的天數），所有專員、所有日期加總；檔案較大，需要時再載入。</span></div>
+    <div id="casesBody" class="hide">
+      <div class="row">
+        <label>首次打開 <select id="cFrom"></select></label> ～ <select id="cTo"></select>
+        <label>最終狀態 <select id="cStatus"><option value="">全部</option><option value="judge">Judge</option><option value="pending">Pending</option><option value="peek">只看過</option></select></label>
+        <label>退貨原因 <select id="cRR"></select></label>
+        <label>金額 <select id="cAmt"></select></label>
+        <label>經手人數 <select id="cN"><option value="">全部</option><option value="1">1 人</option><option value="2">2 人</option><option value="3">3 人以上</option></select></label>
+        <label>RID <input id="cRid" size="16" placeholder="輸入部分即可"></label>
+        <label class="muted"><input type="checkbox" id="cMine"> 只看目前專員經手的</label>
+      </div>
+      <p class="muted" id="cNote" style="margin:4px 0 8px"></p>
+      <div class="tablewrap" id="cases"></div>
+      <h2 style="margin-top:22px">依案件屬性彙整 <span class="muted" style="font-weight:400;font-size:13px">（難的是案件還是人）</span></h2>
+      <div class="row"><label>依 <select id="aBy"></select></label><span class="muted">只算上面篩選範圍內、已 Judge 的案件</span></div>
+      <div class="tablewrap" id="attrs"></div>
+    </div>
+  </div>
+
   <div class="card">
     <h2>總覽</h2>
     <div id="levels"></div>
@@ -257,9 +282,18 @@ const EXTERNAL = new Set(["dms_other", "ih", "bi", "mypage", "g_sheet", "g_form"
 const WORK_PAGES = new Set(["dms_case", "dms_other", "ih", "bi", "mypage", "g_sheet", "g_form", "g_slides", "g_doc"]);   // 閒置時停在這些頁面＝可能在閱讀
 // Pending 原因代碼 → 名稱（知道的再補上；沒有的直接顯示代碼）
 const PENDING_REASON = { 21: "法務確認" };
+// 退貨原因（return_reason、real_return_reason 共用）、爭議原因（dispute_reason）
+const RETURN_REASON = { 1: "Parcel not delivered", 2: "Seller sent wrong item (e.g wrong size, model)", 4: "Product does not meet expectations",
+  102: "I want to return item in original/ sealed condition", 103: "Missing part of the order", 104: "Product does not meet expectations",
+  105: "Counterfeit product", 106: "Damaged Item", 107: "Product is defective or does not work", 108: "Empty parcel" };
+const DISPUTE_REASON = { 0: "", 81: "Did not receive the return product", 82: "Received return products with physical damage",
+  83: "Received return products with physical damage", 84: "Received wrong return product", 46: "Did not receive the return product",
+  47: "Received return products with physical damage", 48: "Received incomplete return products (missing quantity/accessories)",
+  49: "Received wrong return product", 54: "Buyer has been refunded wrong amount", 55: "Buyer claim is correct, but I have other concerns" };
 const $ = (id) => document.getElementById(id);
 let ALL = [];          // 所有片段
 let SUMMARY = null, DAY = null;   // Drive 按日模式（見「資料來源」）
+let CASES = null, caseOpen = new Set(), caseSort = { k: "first", d: -1 };   // 案件歷程（見「案件歷程」）
 let EVTS = [];         // 案件操作紀錄（26.11.11 起）：{ em, dev, ev, op, rid, t, m, p, code, btn, a }
 let view = [];         // 篩選後
 let sortKey = null, sortDir = 1;
@@ -350,8 +384,8 @@ function caseOps(em) {
   }
   return m;
 }
-function evtLabel(x) {
-  const name = OP_NAME[x.op] || `${x.m} ${x.p || ""}`;
+function evtLabel(x, withTime = false) {
+  const name = (OP_NAME[x.op] || `${x.m} ${x.p || ""}`) + (withTime ? " " + fmtTime(x.t) : "");
   const r = x.op === "pending" && x.a && x.a.pending_reason != null ? `：${reasonName(x.a.pending_reason)}` : "";
   return `${name}${r}`;
 }
@@ -652,6 +686,7 @@ function renderShift() {
 
 function render() {
   if (DAY) renderPeriod();
+  if (CASES && $("cMine").checked) renderCases2();
   markOff();
   renderShift();
   const { base, shown } = applyFilters();
@@ -769,23 +804,38 @@ function renderStrips(rows) {
 function renderDetail(rows) {
   const out = [];
   let prev = null;
-  // 26.11.11 起：Pending／Judge 等動作插在發生的時間點（排序時不顯示）
-  const evs = sortKey || !rows.length ? [] : EVTS.filter((e) => e.em === rows[0].em && e.ev === "api" && OP_NAME[e.op]
+  // 26.11.11 起：Pending／Judge 標在發生當下那一段「DMS 案件頁」上（同一件 RID、時間落在片段內）；
+  // 對不上任何片段的（少數時間剛好在兩段之間）才在發生的時間點另插一列
+  const evs = !rows.length ? [] : EVTS.filter((e) => e.em === rows[0].em && e.ev === "api" && OP_NAME[e.op]
     && e.t >= rows[0].s - 1000 && e.t <= rows.at(-1).e + 1000 && (!$("fDev").value || e.dev === $("fDev").value));
+  const used = new Set(), onSeg = new Map();
+  for (const x of rows) {
+    if (x.st !== "work" || x.cat !== "dms_case") continue;
+    const hit = evs.filter((e) => !used.has(e) && (!e.rid || e.rid === x.rid) && e.t >= x.s - 1000 && e.t <= x.e + 1000);
+    if (hit.length) { hit.forEach((e) => used.add(e)); onSeg.set(x, hit); }
+  }
+  const loose = evs.filter((e) => !used.has(e));
+  const opColor = (e) => (e.op === "judge" ? "#e03131" : "#f08c00");
+  const failTxt = (e) => (e.code != null && !evtOk(e) ? ` <span class="warn">HTTP ${e.code}（失敗）</span>` : "");
+  const opTag = (e) => `<span class="badge" style="background:${opColor(e)};margin-left:4px">${esc(evtLabel(e, true))}</span>`;
+  const btnTxt = (list) => list.map((e) => (e.btn ? `按鈕「${esc(e.btn)}」` : "") + failTxt(e)).filter(Boolean).join("、");
   let ei = 0;
-  const evRow = (e) => `<tr class="evt"><td>${fmtTime(e.t)}</td><td colspan="2">⚑ ${esc(evtLabel(e))}</td><td colspan="2">${e.rid ? `<a href="https://dms.cs.shopee.tw/dispute/detail/${e.rid}" target="_blank">${e.rid}</a>` : ""}</td>
-    <td class="muted" colspan="2">${e.btn ? `按鈕「${esc(e.btn)}」` : ""}${e.code != null && !evtOk(e) ? ` <span class="warn">HTTP ${e.code}（失敗）</span>` : ""}</td><td class="muted">${esc(e.dev)}</td><td></td></tr>`;
+  const evRow = (e) => `<tr class="evt"><td>${fmtTime(e.t)}</td><td></td><td></td>
+    <td><span class="badge" style="background:${opColor(e)}">${esc(evtLabel(e))}</span></td>
+    <td>${e.rid ? `<a href="https://dms.cs.shopee.tw/dispute/detail/${e.rid}" target="_blank">${e.rid}</a>` : ""}</td>
+    <td class="muted">${btnTxt([e])}</td><td></td><td class="muted">${esc(e.dev)}</td><td></td></tr>`;
   for (const x of sortRows(rows)) {
-    while (ei < evs.length && evs[ei].t <= x.s) out.push(evRow(evs[ei++]));
+    if (!sortKey) while (ei < loose.length && loose[ei].t <= x.s) out.push(evRow(loose[ei++]));
     if (!sortKey && prev && x.s - prev.e > 60000) out.push(`<tr class="gap"><td colspan="9">${fmtTime(prev.e)}～${fmtTime(x.s)} 沒有紀錄（${dur((x.s - prev.e) / 1000)}）</td></tr>`);
-    out.push(`<tr><td>${fmtTime(x.s)}</td><td>${fmtTime(x.e)}</td><td class="num">${dur(x.sec)}</td>
-      <td><span class="badge" style="background:${colorOf(x)}">${esc(labelOf(x))}</span></td>
+    const ops = onSeg.get(x) || [];
+    out.push(`<tr${ops.length ? ' class="evt"' : ""}><td>${fmtTime(x.s)}</td><td>${fmtTime(x.e)}</td><td class="num">${dur(x.sec)}</td>
+      <td><span class="badge" style="background:${colorOf(x)}">${esc(labelOf(x))}</span>${ops.map(opTag).join("")}</td>
       <td>${x.rid ? `<a href="https://dms.cs.shopee.tw/dispute/detail/${x.rid}" target="_blank">${x.rid}</a>` : ""}</td>
-      <td>${x.doc ? docLink(x) : esc(x.host || "")}</td>
+      <td>${x.doc ? docLink(x) : ops.length ? `<span class="muted">${btnTxt(ops)}</span>` : esc(x.host || "")}</td>
       <td class="num">${x.tabs ?? ""}</td><td class="muted">${esc(x.dev)}</td><td class="muted">${esc(x.ver)}</td></tr>`);
     prev = x;
   }
-  while (ei < evs.length) out.push(evRow(evs[ei++]));
+  if (!sortKey) while (ei < loose.length) out.push(evRow(loose[ei++]));
   $("tabDetail").innerHTML = table(["開始", "結束", "時長", "狀態／系統", "RID", "網域／文件", "開啟案件頁數", "裝置", "版本"],
     ["s", "e", "sec", "label", "rid", "host", "tabs", "dev", "ver"], out.join(""));
   bindSort("tabDetail", () => renderDetail(view));
@@ -1166,6 +1216,7 @@ const CFG = {
   fileName: "rrh_activity.db",       // 完整資料庫（備用：沒有報表檔、或要看多天原始片段時）
   summaryFile: "rrh_summary.json.gz", // 排程產生：每人每天的彙總
   usageFile: "rrh_usage.json.gz",     // 排程產生：功能使用
+  casesFile: "rrh_cases.json.gz",     // 排程產生：依案件（按「載入案件資料」才下載）
   orgFile: "rrh_org.csv",   // 單位對照表（email, L1, L2），放在同一個 Drive 帳號底下就會自動載入
   sqlJs: "https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/",
 };
@@ -1287,14 +1338,16 @@ async function enterDayMode(sum, meta) {
   $("pFrom").value = dates.filter((d) => d >= fmtDate(toMs((dates.at(-1) || "2000-01-01") + " 00:00:00") - 6 * 86400e3))[0] || dates[0] || "";
   $("pFrom").onchange = $("pTo").onchange = renderPeriod;
   $("periodCard").classList.remove("hide");
+  $("casesCard").classList.remove("hide");
   $("app").classList.remove("hide");
   setMsg(`彙總檔：${SUMMARY.rows.length} 筆（${dates.length} 天、${AGENTS.length} 人），排程更新於 ${SUMMARY.generated_at || meta.modifiedTime}`);
   await showDay($("fDate").value);
 }
 function leaveDayMode() {
   if (!DAY) return;
-  SUMMARY = null; DAY = null;
+  SUMMARY = null; DAY = null; CASES = null;
   $("periodCard").classList.add("hide");
+  $("casesCard").classList.add("hide"); $("casesBody").classList.add("hide"); $("casesLoadRow").classList.remove("hide");
 }
 async function showDay(date) {
   if (!DAY || !date) { render(); return; }
@@ -1318,6 +1371,127 @@ async function showDay(date) {
   DAY.cur = day;
   EVTS = normEvts(day.evts);
   loadSegs(day.segs, `${date}：`, 0, true);
+}
+
+
+// ----- 案件歷程（依案件）：排程產生的 rrh_cases.json.gz，所有專員、所有日期加總 -----
+const CASE_ATTR = { rr: ["退貨原因", RETURN_REASON], rrr: ["實際退貨原因", RETURN_REASON], dr: ["爭議原因", DISPUTE_REASON], amt: ["金額", null],
+  rt: ["退貨類型（request_type）", null], st: ["賣家類型", null], kr: ["kind_of_rr", null], lt: ["物流類型", null], n: ["第幾次發起退貨", null], bc: ["買家類別", null], pm: ["付款方式", null] };
+const codeLabel = (k, v) => { if (v == null || v === "") return "（未記錄）"; const m = CASE_ATTR[k] && CASE_ATTR[k][1]; return m && m[v] ? `${v} ${m[v]}` : String(v); };
+const shortEm = (em) => String(em).split("@")[0];
+
+$("casesLoad").onclick = async () => {
+  try {
+    setMsg("下載案件資料…");
+    const r = await driveJson(CFG.casesFile);
+    if (!r) { setMsg(`Drive 上找不到 ${CFG.casesFile}（排程還沒產生？）`); return; }
+    const o = r.data, E = o.ems;
+    CASES = o.cases.map(([rid, first, people, pends, judge, a]) => {
+      const ps = people.map(([e, f, l, t, out, idle, v]) => ({ em: E[e], first: f * 1000, last: l * 1000, time: t, out, idle, visits: v }));
+      const pd = pends.map(([e, t, reason]) => ({ em: E[e], t: t * 1000, reason }));
+      const jd = judge ? { em: E[judge[0]], t: judge[1] * 1000 } : null;
+      const doers = new Set([...pd.map((x) => x.em), ...(jd ? [jd.em] : [])]);
+      const hs = ps.filter((p) => doers.has(p.em)), pk = ps.filter((p) => !doers.has(p.em));
+      const sum = (arr) => arr.reduce((x, p) => x + p.time, 0);
+      return { rid, first: first * 1000, date: fmtDate(first * 1000), people: ps, handlers: hs, peekers: pk, pends: pd, judge: jd, a: a || {},
+        status: jd ? "judge" : pd.length ? "pending" : "peek", tot: hs.length ? sum(hs) : null, peekTot: sum(pk), n: hs.length || ps.length,
+        elapsed: jd ? (jd.t - first * 1000) / 1000 : null };
+    });
+    const dates = [...new Set(CASES.map((c) => c.date))].sort(), opt = (v, t) => `<option value="${esc(v)}">${esc(t ?? v)}</option>`;
+    $("cFrom").innerHTML = dates.map((d) => opt(d)).join(""); $("cTo").innerHTML = dates.map((d) => opt(d)).join("");
+    $("cFrom").value = dates[0] || ""; $("cTo").value = dates.at(-1) || "";
+    const vals = (k) => [...new Set(CASES.map((c) => c.a[k]).filter((v) => v != null))].sort((x, y) => (x > y ? 1 : -1));
+    $("cRR").innerHTML = opt("", "全部") + vals("rr").map((v) => opt(v, codeLabel("rr", v))).join("");
+    $("cAmt").innerHTML = opt("", "全部") + vals("amt").map((v) => opt(v)).join("");
+    $("aBy").innerHTML = Object.entries(CASE_ATTR).map(([k, [n]]) => opt(k, n)).join("");
+    for (const id of ["cFrom", "cTo", "cStatus", "cRR", "cAmt", "cN", "cRid", "cMine", "aBy"]) $(id).oninput = $(id).onchange = renderCases2;
+    $("casesLoadRow").classList.add("hide"); $("casesBody").classList.remove("hide");
+    setMsg(`案件資料：${CASES.length} 件（${o.from} 起第一次被打開的案件）`);
+    renderCases2();
+  } catch (e) { setMsg("案件資料讀取失敗：" + e.message); }
+};
+
+function caseFiltered() {
+  const from = $("cFrom").value, to = $("cTo").value, st = $("cStatus").value, rr = $("cRR").value, amt = $("cAmt").value, n = $("cN").value;
+  const rid = $("cRid").value.trim(), mine = $("cMine").checked;
+  return CASES.filter((c) => c.date >= from && c.date <= to && (!st || c.status === st) && (!rr || String(c.a.rr) === rr) && (!amt || c.a.amt === amt)
+    && (!n || (n === "3" ? c.n >= 3 : c.n === +n)) && (!rid || c.rid.includes(rid)) && (!mine || c.people.some((p) => p.em === curAgent)));
+}
+
+function renderCases2() {
+  if (!CASES) return;
+  const list = caseFiltered();
+  const key = { first: (c) => c.first, tot: (c) => c.tot ?? c.peekTot, elapsed: (c) => c.elapsed ?? -1, n: (c) => c.n, pend: (c) => c.pends.length }[caseSort.k];
+  list.sort((a, b) => (key(a) - key(b)) * caseSort.d);
+  const LIMIT = 300, shown = list.slice(0, LIMIT);
+  const cnt = (k) => list.filter((c) => c.status === k).length;
+  $("cNote").textContent = `${list.length} 件（Judge ${cnt("judge")}、Pending ${cnt("pending")}、只看過 ${cnt("peek")}）` + (list.length > LIMIT ? `，只列前 ${LIMIT} 件，可以用上方條件縮小範圍或點欄位排序` : "") +
+    "。總處理時間＝有 Pending／Judge 的專員實際停在這件案件的時間加總（DMS＋外部查詢，到 Judge 為止，不含等待）；只看過的案件顯示所有人查看時間（灰字）。經過時間＝第一次打開 → Judge。";
+  const md = (t) => { const x = new Date(t + 8 * 3600e3).toISOString(); return `${+x.slice(5, 7)}/${+x.slice(8, 10)} ${x.slice(11, 16)}`; };
+  const elapsedTxt = (sec) => (sec == null ? "" : sec >= 86400 ? `${Math.floor(sec / 86400)} 天 ${Math.floor((sec % 86400) / 3600)} 小時` : sec >= 3600 ? `${Math.floor(sec / 3600)} 小時 ${Math.floor((sec % 3600) / 60)} 分` : dur(sec));
+  const body = shown.map((c) => {
+    const order = (c.handlers.length ? c.handlers : c.people).map((p) => shortEm(p.em)).join(" → ");
+    const row = `<tr${caseOpen.has(c.rid) ? ' class="open"' : ""}><td><a href="#" data-rid="${c.rid}">${caseOpen.has(c.rid) ? "▾" : "▸"} ${c.rid}</a></td>
+      <td>${statusCell(c)}</td><td class="num">${c.n}</td><td>${esc(order)}</td><td>${md(c.first)}</td><td class="num">${c.pends.length || ""}</td>
+      <td>${c.judge ? `${md(c.judge.t)}（${esc(shortEm(c.judge.em))}）` : ""}</td>
+      <td class="num">${c.tot != null ? `<b>${dur(c.tot)}</b>` : `<span class="muted">${dur(c.peekTot)}</span>`}</td>
+      <td class="num">${c.elapsed != null ? elapsedTxt(c.elapsed) : c.status === "pending" ? '<span class="muted">進行中</span>' : ""}</td>
+      <td title="${esc(codeLabel("rr", c.a.rr))}">${c.a.rr ?? ""}</td><td>${esc(c.a.amt || "")}</td>
+      <td class="num"><a href="https://dms.cs.shopee.tw/dispute/detail/${c.rid}" target="_blank" title="在 DMS 打開">↗</a></td></tr>`;
+    return row + (caseOpen.has(c.rid) ? `<tr><td colspan="12" style="padding:2px 9px 12px">${caseTimeline(c, md, elapsedTxt)}</td></tr>` : "");
+  }).join("");
+  const sortable = { first: "首次打開", n: "經手人數", pend: "Pending", tot: "總處理時間", elapsed: "經過時間" };
+  const heads = ["RID", "最終狀態", "n", "經手順序", "first", "pend", "Judge", "tot", "elapsed", "退貨原因", "金額", ""].map((h) => sortable[h]
+    ? `<th data-ck="${h}" style="cursor:pointer">${sortable[h]}${caseSort.k === h ? (caseSort.d > 0 ? " ▲" : " ▼") : ""}</th>` : `<th>${h}</th>`).join("");
+  $("cases").innerHTML = `<table><thead><tr>${heads}</tr></thead><tbody>${body || `<tr><td colspan="12" class="muted">沒有符合條件的案件</td></tr>`}</tbody></table>`;
+  $("cases").querySelectorAll("a[data-rid]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); const r = a.dataset.rid; caseOpen.has(r) ? caseOpen.delete(r) : caseOpen.add(r); renderCases2(); }));
+  $("cases").querySelectorAll("th[data-ck]").forEach((th) => (th.onclick = () => { const k = th.dataset.ck; caseSort = { k, d: caseSort.k === k ? -caseSort.d : -1 }; renderCases2(); }));
+  renderCaseAttrs(list);
+}
+
+/** 展開的歷程：依時間排列 打開／處理／Pending／Judge，間隔超過 30 分鐘標出等待時間 */
+function caseTimeline(c, md, elapsedTxt) {
+  const items = [];
+  c.handlers.forEach((p, i) => {
+    items.push({ t: p.first, h: `<b>${md(p.first)}</b>　${esc(shortEm(p.em))} ${i === 0 && p.first <= c.first ? "第一次打開" : "打開"}${i > 0 ? '<span class="tag">接手</span>' : ""}` });
+    items.push({ t: p.first + 1, h: `${esc(shortEm(p.em))} 處理 <b>${dur(p.time)}</b><span class="muted">（進入 ${p.visits} 次${p.out ? `、中途離開 ${dur(p.out)}` : ""}${p.idle ? `、停留閒置 ${dur(p.idle)}` : ""}）</span>` });
+  });
+  for (const x of c.pends) items.push({ t: x.t, dot: "#f08c00", h: `<b>${md(x.t)}</b>　<span class="badge" style="background:#f08c00">Pending${x.reason != null ? "：" + esc(reasonName(x.reason)) : ""}</span>　${esc(shortEm(x.em))}` });
+  if (c.judge) items.push({ t: c.judge.t, dot: "#e03131", h: `<b>${md(c.judge.t)}</b>　<span class="badge" style="background:#e03131">Judge</span>　${esc(shortEm(c.judge.em))}` });
+  items.sort((a, b) => a.t - b.t);
+  let prev = null;
+  const lines = [];
+  for (const it of items) {
+    if (prev != null && it.t - prev > 30 * 60e3) lines.push(`<div class="wait">⋯ 間隔 ${elapsedTxt((it.t - prev) / 1000)} ⋯</div>`);
+    lines.push(`<div><i class="dot"${it.dot ? ` style="background:${it.dot}"` : ""}></i>${it.h}</div>`);
+    prev = Math.max(prev ?? 0, it.t);
+  }
+  const peek = c.peekers.map((p) => `${esc(shortEm(p.em))}（${md(p.first)}，${dur(p.time)}）`).join("、");
+  const attrs = Object.entries(c.a).map(([k, v]) => `${CASE_ATTR[k] ? CASE_ATTR[k][0] : k}：${esc(codeLabel(k, v))}`).join("；");
+  return `<div class="tl">${lines.join("") || '<div class="muted">沒有人送出 Pending／Judge</div>'}
+    <div class="muted" style="margin-top:8px">${peek ? `只看過：${peek}` : ""}${peek && attrs ? "　｜　" : ""}${attrs ? `屬性：${attrs}` : "屬性：（未記錄，26.11.11 以前的案件）"}</div></div>`;
+}
+
+/** 依案件屬性彙整：已 Judge 的案件；專員間差距＝各 Judge 專員（≥3 件）的處理時間中位數，最快～最慢 */
+function renderCaseAttrs(list) {
+  const k = $("aBy").value || "rr";
+  const groups = new Map();
+  for (const c of list) if (c.status === "judge" && c.tot != null) { const g = codeLabel(k, c.a[k]); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(c); }
+  const rows = [...groups.entries()].map(([g, cs]) => {
+    const med = median(cs.map((c) => c.tot));
+    const byJ = new Map();
+    for (const c of cs) { if (!byJ.has(c.judge.em)) byJ.set(c.judge.em, []); byJ.get(c.judge.em).push(c.tot); }
+    const ms = [...byJ.values()].filter((a) => a.length >= 3).map(median);
+    const agents = new Set(cs.flatMap((c) => c.handlers.map((p) => p.em)));
+    return { g, n: cs.length, med, pend: cs.filter((c) => c.pends.length).length / cs.length, hand: cs.reduce((a, c) => a + c.handlers.length, 0) / cs.length,
+      agents: agents.size, lo: ms.length ? Math.min(...ms) : null, hi: ms.length ? Math.max(...ms) : null, nAg: ms.length };
+  }).sort((a, b) => b.n - a.n);
+  const body = rows.map((r) => `<tr><td>${esc(r.g)}</td><td class="num">${r.n}</td><td class="num"><b>${dur(r.med)}</b></td><td class="num">${(r.pend * 100).toFixed(0)}%</td>
+    <td class="num">${r.hand.toFixed(1)}</td><td class="num">${r.agents}</td>
+    <td class="num">${r.nAg ? `${dur(r.lo)}～<span${r.hi >= r.med * 2 ? ' class="warn"' : ""}>${dur(r.hi)}</span> <small class="muted">（${r.nAg} 位）</small>` : '<span class="muted">-</span>'}</td></tr>`).join("");
+  $("attrs").innerHTML = table([CASE_ATTR[k][0], "Judge 件數", "總處理時間（中位數）", "有 Pending 比例", "平均經手人數", "處理過的專員數", "專員間差距（Judge ≥3 件的專員，各自中位數的最快～最慢）"], null,
+    body || `<tr><td colspan="7" class="muted">範圍內沒有已 Judge 的案件</td></tr>`) +
+    `<p class="muted" style="margin:8px 0 0">讀法：某一類大家都慢（中位數高、專員間差距小）→ 案件本身難，考慮調 KPI／SOP；中位數正常但少數人特別慢（最慢值標橘色＝超過中位數 2 倍）→ 個人輔導。</p>`;
 }
 
 /** 期間彙總（彙總檔）：每人日均，群體篩選跟上方 L1／L2／L3 一樣；整天只有閒置（電腦沒關）的日子不算 */
