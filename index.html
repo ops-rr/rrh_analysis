@@ -183,12 +183,18 @@ tr.me td{background:rgba(79,142,247,.14)}
         <label>L2 <select id="fL2"></select></label>
         <label>L3 <select id="fL3"></select></label>
       </div>
-      <details class="more"><summary>單位對照表</summary>
+      <details class="more"><summary>單位對照表、分類對照表</summary>
         <div class="row" style="margin-top:8px">
-          <label>匯入 CSV（email, L1, L2, L3） <input type="file" id="orgFile" accept=".csv,.tsv,.txt"></label>
-          <button id="orgClear">清除對照表</button>
+          <label>單位對照表 CSV（email, L1, L2, L3） <input type="file" id="orgFile" accept=".csv,.tsv,.txt"></label>
+          <button id="orgClear">清除</button>
           <span class="muted" id="orgMsg"></span>
         </div>
+        <div class="row" style="margin-top:8px">
+          <label>分類對照表 CSV（rrh_category.csv） <input type="file" id="catFile" accept=".csv,.tsv,.txt"></label>
+          <button id="catClear">改回內建規則</button>
+          <span class="muted" id="catMsg"></span>
+        </div>
+        <p class="muted" style="margin:6px 0 0;font-size:12px">Drive 模式一律使用排程算彙總時的分類對照表（放在 Drive 的 RRH_Activity_Data 資料夾，改了下次排程會全部重算）；這裡匯入的只用在本機檔案、Firebase 模式。</p>
       </details>
     </div>
     <div class="secs" data-panel="team">
@@ -358,7 +364,87 @@ const COLOR = {
   outside: "var(--outside)", idle: "var(--idle)", off: "var(--off)",
 };
 const EXTERNAL = new Set(["dms_other", "ih", "bi", "mypage", "g_sheet", "g_form", "g_slides", "g_doc"]);
-const WORK_PAGES = new Set(["dms_case", "dms_other", "ih", "bi", "mypage", "g_sheet", "g_form", "g_slides", "g_doc"]);   // 閒置時停在這些頁面＝可能在閱讀
+const WORK_PAGES = new Set(["dms_case", "dms_other", "ih", "bi", "mypage", "g_sheet", "g_form", "g_slides", "g_doc"]);   // （舊）閒置時停在這些頁面＝可能在閱讀；現在改由分類規則的「工作頁面」決定
+
+// ---------- 分類規則（rrh_category.csv）----------
+// 由「順序」小到大比對，第一條符合的採用；決定每個片段的顯示名稱、L2 群組、顏色，以及是不是「工作頁面」
+// （工作頁面＝閒置時算「停在工作頁面閱讀」、案件中途查詢算進該案件的「外部查詢」）
+// Drive 模式用彙總檔裡的規則（跟排程算彙總時用的是同一份）；其他模式用畫面匯入的，沒有就用下面的內建規則（＝原本的分類）
+const DEFAULT_RULES_CSV = `順序,比對欄位,比對方式,比對值,顯示名稱,L2 群組,工作頁面,顏色
+10,cat,等於,dms_case,DMS 案件頁,DMS 案件頁,Y,#1f9d63
+20,cat,等於,dms_other,DMS 其他頁,內部與查詢系統,Y,#5aa9e6
+21,cat,等於,ih,IH,內部與查詢系統,Y,#d6336c
+22,cat,等於,bi,BI,內部與查詢系統,Y,#f59f00
+23,cat,等於,mypage,MyPage,內部與查詢系統,Y,#868e96
+70,cat,等於,g_sheet,Google 試算表,Google 文件,Y,#0b7285
+71,cat,等於,g_form,Google 表單,Google 文件,Y,#7048e8
+72,cat,等於,g_slides,Google 簡報,Google 文件,Y,#e67700
+73,cat,等於,g_doc,Google 文件,Google 文件,Y,#1971c2
+80,cat,等於,chat,聊天（SeaTalk 網頁）,聊天,N,#15aabf
+85,cat,等於,ai,外部 AI,外部 AI,N,#ae3ec9
+999,cat,等於,other,其他網站,其他網站,N,#8e6bd8`;
+const FALLBACK_RULE = { o: 1e9, f: "cat", how: "等於", val: "other", name: "其他網站", l2: "其他網站", read: false, color: "#8e6bd8", fallback: true };
+let RULES = [], RULE_SRC = "", RULE_CACHE = new Map();
+
+/** 簡單的 CSV 解析（支援雙引號裡的逗號） */
+function parseCsvText(text) {
+  const out = []; let row = [], cur = "", q = false;
+  text = text.replace(/^﻿/, "");
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) { if (c === '"' && text[i + 1] === '"') { cur += '"'; i++; } else if (c === '"') q = false; else cur += c; }
+    else if (c === '"') q = true;
+    else if (c === "," || c === "\t") { row.push(cur); cur = ""; }
+    else if (c === "\n" || c === "\r") { if (c === "\r" && text[i + 1] === "\n") i++; row.push(cur); out.push(row); row = []; cur = ""; }
+    else cur += c;
+  }
+  if (cur || row.length) { row.push(cur); out.push(row); }
+  return out.map((r) => r.map((x) => x.trim())).filter((r) => r.some(Boolean));
+}
+function parseRules(text) {
+  const rows = parseCsvText(text);
+  if (!rows.length) return [];
+  const h = rows[0].map((x) => x.replace(/\s+/g, "").toLowerCase());
+  const col = (...names) => h.findIndex((x) => names.includes(x));
+  const I = { o: col("順序", "order"), f: col("比對欄位", "field"), how: col("比對方式", "match"), val: col("比對值", "value"), name: col("顯示名稱", "name"),
+    l2: col("l2群組", "l2", "群組"), read: col("工作頁面", "閒置算閱讀", "read"), color: col("顏色", "color") };
+  if (I.f < 0 || I.val < 0) throw new Error("找不到「比對欄位」「比對值」欄位");
+  return rows.slice(1).map((r, i) => ({
+    o: Number(r[I.o]) || (i + 1) * 10, f: (r[I.f] || "").toLowerCase(), how: r[I.how] || "等於", val: r[I.val] || "",
+    name: r[I.name] || r[I.val], l2: r[I.l2] || "其他網站", read: /^(y|yes|是|1|true|v)$/i.test(r[I.read] || ""), color: r[I.color] || "#8e6bd8",
+  })).filter((r) => r.f && r.val).sort((a, b) => a.o - b.o);
+}
+function matchRule(x) {
+  for (const r of RULES) {
+    const v = String(x[r.f] ?? "").toLowerCase(), t = r.val.toLowerCase();
+    if ((r.how === "等於" && v === t) || (r.how === "包含" && v.includes(t)) || (r.how === "開頭" && v.startsWith(t)) || (r.how === "結尾" && v.endsWith(t))) return r;
+  }
+  return null;
+}
+/** 片段 → 規則（有快取） */
+function ruleOf(x) {
+  const k = `${x.cat || "other"}\u0001${x.host || ""}\u0001${x.title || ""}\u0001${x.doc || ""}`;
+  let r = RULE_CACHE.get(k);
+  if (r === undefined) { r = matchRule({ cat: x.cat || "other", host: x.host || "", title: x.title || "", doc: x.doc || "" }) || FALLBACK_RULE; RULE_CACHE.set(k, r); }
+  return r;
+}
+/** L2 群組的順序（依規則出現順序）、顏色、是不是工作頁面 */
+function l2List() {
+  const seen = []; for (const r of RULES) if (!seen.includes(r.l2)) seen.push(r.l2);
+  if (!seen.includes("其他網站")) seen.push("其他網站");
+  for (const g of (SUMMARY && SUMMARY.l2) || []) if (!seen.includes(g)) seen.push(g);
+  return seen;
+}
+const l2Color = (g) => (RULES.find((r) => r.l2 === g) || FALLBACK_RULE).color;
+const l2Read = (g) => { const rs = RULES.filter((r) => r.l2 === g); return rs.length ? rs.some((r) => r.read) : false; };
+function setRules(list, src) {
+  RULES = list && list.length ? list : parseRules(DEFAULT_RULES_CSV);
+  RULE_SRC = list && list.length ? src : "內建規則";
+  RULE_CACHE = new Map();
+  const el = document.getElementById("catMsg");
+  if (el) el.textContent = `目前使用：${RULE_SRC}（${RULES.length} 條規則、${l2List().length} 個 L2 群組）`;
+}
+
 // Pending 原因代碼 → 名稱（知道的再補上；沒有的直接顯示代碼）
 const PENDING_REASON = { 21: "法務確認" };
 // 退貨原因（return_reason、real_return_reason 共用）、爭議原因（dispute_reason）
@@ -372,6 +458,7 @@ const DISPUTE_REASON = { 0: "", 81: "Did not receive the return product", 82: "R
 const $ = (id) => document.getElementById(id);
 let ALL = [];          // 所有片段
 let SUMMARY = null, DAY = null;   // Drive 按日模式（見「資料來源」）
+try { const saved = store("rrhRules"); setRules(saved ? parseRules(saved) : null, "畫面匯入的分類對照表"); } catch (_) { setRules(null); }
 let CASES = null, caseOpen = new Set(), caseSort = { k: "first", d: -1 };   // 案件歷程（見「案件歷程」）
 let EVTS = [];         // 案件操作紀錄（26.11.11 起）：{ em, dev, ev, op, rid, t, m, p, code, btn, a }
 let view = [];         // 篩選後
@@ -546,6 +633,18 @@ function parseOrg(text) {
 function setOrg(obj) { ORG = obj; store("rrhOrg", JSON.stringify(obj)); orgRefresh(); fillCmp(); fillCaseAgents(); if (ALL.length || SUMMARY) render(); }
 $("orgFile").onchange = async (e) => { const f = e.target.files[0]; if (!f) return; setOrg(parseOrg(await f.text())); e.target.value = ""; };
 $("orgClear").onclick = () => setOrg({});
+$("catFile").onchange = async (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    const text = await f.text(), list = parseRules(text);
+    if (!list.length) throw new Error("沒有讀到任何規則");
+    store("rrhRules", text);
+    if (!SUMMARY) { setRules(list, "畫面匯入的分類對照表"); TEAM_CACHE.key = ""; render(); }
+    else setMsg("已存下分類對照表；Drive 模式仍使用彙總檔裡的規則，切到本機檔案或 Firebase 模式時才會用到");
+  } catch (err) { setMsg("分類對照表讀取失敗：" + err.message); }
+  e.target.value = "";
+};
+$("catClear").onclick = () => { try { localStorage.removeItem("rrhRules"); } catch (_) {} if (!SUMMARY) { setRules(null); TEAM_CACHE.key = ""; render(); } };
 
 function orgRefresh() {
   const l1s = [...new Set(AGENTS.map(orgOf).filter(Boolean).map((o) => o.l1).filter(Boolean))].sort();
@@ -577,15 +676,10 @@ function groupMembers() {
 }
 
 /** 個人 vs 群體：每人先算「日均」，群體取中位數（不含本人）；占比＝L1 占總經過時間、L2 占所屬 L1 */
-const CMP_ITEMS = [
+const cmpItems = () => [
   ["總經過時間", (m) => m.T, null, 0],
   ["工作中", (m) => m.v.work, (m) => m.T, 0],
-  ["DMS 案件頁", (m) => m.v.w.case, (m) => m.v.work, 1],
-  ["內部與查詢系統", (m) => m.v.w.int, (m) => m.v.work, 1],
-  ["Google 文件", (m) => m.v.w.gdoc, (m) => m.v.work, 1],
-  ["聊天（SeaTalk 網頁）", (m) => m.v.w.chat, (m) => m.v.work, 1],
-  ["外部 AI", (m) => m.v.w.ai, (m) => m.v.work, 1],
-  ["其他網站", (m) => m.v.w.other, (m) => m.v.work, 1],
+  ...l2List().map((g) => [g, (m) => m.v.w[g] || 0, (m) => m.v.work, 1]),
   ["Chrome 外", (m) => m.v.outside, (m) => m.T, 0],
   ["閒置", (m) => m.v.idle, (m) => m.T, 0],
   ["停在工作頁面閱讀", (m) => m.v.i.page, (m) => m.v.idle, 1],
@@ -636,7 +730,7 @@ function renderCompare(base) {
   if (!me) { $("cmp").innerHTML = `<p class="muted">${esc(curAgent)} 在目前的篩選條件下沒有資料。</p>`; return; }
   if (!G.length) { $("cmp").innerHTML = `<p class="muted">群體「${esc(lbl)}」（不含本人）在這個範圍沒有其他人的資料。</p>`; return; }
   const sg = (n) => (Math.abs(n) < 1 ? "±0" : (n > 0 ? "+" : "−") + dur(Math.abs(n)));
-  const rows = CMP_ITEMS.map(([name, f, par, lv]) => {
+  const rows = cmpItems().map(([name, f, par, lv]) => {
     const mv = f(me) / me.days, mp = par ? (f(me) / par(me)) * 100 : null;
     const gv = median(G.map((m) => f(m) / m.days)), gp = par ? median(G.filter((m) => par(m) > 0).map((m) => (f(m) / par(m)) * 100)) : null;
     const dp = par ? mp - gp : null;
@@ -776,7 +870,8 @@ function markOff() {
 /** 每天：上班＝第一筆非「未上班」紀錄的開始，下班＝最後一筆的結束；若緊接著是長時間閒置就標示出來 */
 function renderShift() {
   const em = curAgent, dev = $("fDev").value;
-  const rows = ALL.filter((x) => x.em === em && (!dev || x.dev === dev) && !x.off);
+  // 上班／下班＝當天第一／最後一筆「非閒置」片段（Chrome 外也算有用電腦）；凌晨 Windows 維護喚醒產生的閒置不會被當成上班
+  const rows = ALL.filter((x) => x.em === em && (!dev || x.dev === dev) && !x.off && x.st !== "idle");
   const byDate = {};
   for (const x of rows) (byDate[x.date] ||= []).push(x);
   const hm = (ms) => fmtTime(ms).slice(0, 5);
@@ -787,7 +882,7 @@ function renderShift() {
     return `<tr><td>${d}</td><td class="num">${hm(on)}</td><td class="num">${hm(off)}</td><td class="num">${dur((off - on) / 1000)}</td>
       <td class="muted">${run ? `連續閒置 ${durZh((run.e - run.s) / 1000)}（${hm(run.s)}～${next}）` : "最後活動後沒有長時間閒置（可能已關機或關閉 Chrome）"}</td></tr>`;
   }).join("");
-  $("shiftNote").textContent = OFFRUNS.length || body ? `連續閒置達門檻的時段，起點記為下班、終點記為上班，並從閒置時間扣除（改列「未上班」）。目前條件：${Number($("fOffH").value) > 0 ? "≥ " + $("fOffH").value + " 小時" : "已關閉"}。` : "";
+  $("shiftNote").textContent = OFFRUNS.length || body ? `上班／下班＝當天第一／最後一筆非閒置片段（Chrome 外也算）。連續閒置達門檻的時段從閒置時間扣除（改列「未上班」）。目前條件：${Number($("fOffH").value) > 0 ? "≥ " + $("fOffH").value + " 小時" : "已關閉"}。` : "";
   { const d0 = Object.keys(byDate).sort().reverse()[0]; if (d0) { const r = byDate[d0]; setSum("me.shift", `${d0.slice(5)}　${hm(Math.min(...r.map((x) => x.s)))}～${hm(Math.max(...r.map((x) => x.e)))}`); } else setSum("me.shift", ""); }
   $("shift").innerHTML = table(["日期", "上班", "下班", "在線區間", "下班後狀況"], null, body || "<tr><td colspan='5' class='muted'>沒有資料</td></tr>");
 }
@@ -815,7 +910,7 @@ const INTERNAL = ["dms_other", "ih", "bi", "mypage"];
 
 /** L1：工作中／Chrome 外／閒置／沒有紀錄；L2：各 L1 的細項。沒有紀錄＝（每天首尾之間的時間）－（片段涵蓋的時間） */
 function levelStats(rows) {
-  const v = { work: 0, outside: 0, idle: 0, off: 0, gap: 0, span: 0, w: { case: 0, int: 0, gdoc: 0, chat: 0, ai: 0, other: 0 }, i: { page: 0, away: 0, lock: 0 } };
+  const v = { work: 0, outside: 0, idle: 0, off: 0, gap: 0, span: 0, w: {}, i: { page: 0, away: 0, lock: 0 } };   // w：L2 群組 → 秒數（依分類規則）
   const byDate = {};
   for (const x of rows) (byDate[x.date] ||= []).push(x);
   for (const r of Object.values(byDate)) {
@@ -828,11 +923,10 @@ function levelStats(rows) {
       const d = (x.e - x.s) / 1000;
       if (x.st === "work") {
         v.work += d; const c = x.cat || "other";
-        if (c === "dms_case") v.w.case += d; else if (INTERNAL.includes(c)) v.w.int += d; else if (c.startsWith("g_")) v.w.gdoc += d;
-        else if (c === "chat") v.w.chat += d; else if (c === "ai") v.w.ai += d; else v.w.other += d;
+        const g = ruleOf(x).l2; v.w[g] = (v.w[g] || 0) + d;
       } else if (x.st === "outside") v.outside += d;
       else if (x.st === "idle" && x.off) v.off += d;
-      else if (x.st === "idle") { v.idle += d; if (x.host === "locked") v.i.lock += d; else if (x.cat && WORK_PAGES.has(x.cat)) v.i.page += d; else v.i.away += d; }
+      else if (x.st === "idle") { v.idle += d; if (x.host === "locked") v.i.lock += d; else if (x.cat && ruleOf(x).read) v.i.page += d; else v.i.away += d; }
     }
   }
   return v;
@@ -843,9 +937,9 @@ function renderLevels(rows) {
   const v = levelStats(rows), T = v.span - v.off;
   const pct = (a, b) => (b > 0 ? ((a / b) * 100).toFixed(1) + "%" : "-");
   const L = [
-    ["work", "工作中", v.work, "var(--work)", [["DMS 案件頁", v.w.case], ["內部與查詢系統（IH、BI、MyPage、DMS 其他頁）", v.w.int], ["Google 文件", v.w.gdoc], ["聊天（SeaTalk 網頁版）", v.w.chat], ["外部 AI（ChatGPT、Gemini 等）", v.w.ai], ["其他網站", v.w.other]]],
+    ["work", "工作中", v.work, "var(--work)", [...l2List(), ...Object.keys(v.w).filter((g) => !l2List().includes(g))].filter((g) => v.w[g] || l2List().includes(g)).map((g) => [g, v.w[g] || 0])],
     ["outside", "Chrome 外", v.outside, "var(--outside)", []],
-    ["idle", "閒置", v.idle, "var(--idle)", [["停在工作頁面閱讀", v.i.page], ["離開座位（沒動作，含 Chrome 不在前景、停在其他網站）", v.i.away], ["電腦鎖定（26.11.11 起才分得出來）", v.i.lock]]],
+    ["idle", "閒置", v.idle, "var(--idle)", [["停在工作頁面閱讀（分類規則「工作頁面」＝Y）", v.i.page], ["離開座位（沒動作，含 Chrome 不在前景、停在非工作頁面）", v.i.away], ["電腦鎖定（26.11.11 起才分得出來）", v.i.lock]]],
     ["gap", "沒有紀錄（電腦睡眠／關閉 Chrome）", v.gap, "var(--nr)", []],
   ];
   const dates = new Set(rows.map((x) => x.date));
@@ -875,12 +969,12 @@ function renderStats(rows) {
   ].map(([k, v]) => `<div class="stat"><span class="muted">${k}</span><b>${v}</b></div>`).join("");
 }
 
-function colorOf(x) { if (x.off) return "var(--off)"; return x.st === "work" ? COLOR[x.cat || "other"] : COLOR[x.st]; }
+function colorOf(x) { if (x.off) return "var(--off)"; return x.st === "work" ? ruleOf(x).color : COLOR[x.st]; }
 function labelOf(x) {
   if (x.off) return "未上班（連續閒置）";
-  if (x.st === "work") return CAT[x.cat] || x.cat || "其他網站";
+  if (x.st === "work") return ruleOf(x).name;
   if (x.st === "idle" && x.host === "locked") return "閒置（電腦鎖定）";
-  if (x.st === "idle" && x.cat) return `閒置（停在${CAT[x.cat] || x.cat}）`;
+  if (x.st === "idle" && x.cat) return `閒置（停在${ruleOf(x).name}）`;
   return STATE[x.st];
 }
 
@@ -903,8 +997,9 @@ function renderStrips(rows) {
     html.push(`<div class="daylabel muted">${d}</div>${marks ? `<div class="mkrow">${marks}</div>` : ""}<div class="strip">${blocks}</div><div class="axis">${ticks}</div>`);
   }
   $("strips").innerHTML = html.join("") || "<span class='muted'>沒有資料</span>";
-  const used = new Set(rows.map((x) => (x.st === "work" ? x.cat || "other" : x.st)));
-  $("legend").innerHTML = [...used].map((k) => `<span><i style="background:${COLOR[k]}"></i>${CAT[k] || STATE[k]}</span>`).join("") +
+  const used = new Map();
+  for (const x of rows) { const k = x.off ? "未上班" : x.st === "work" ? ruleOf(x).name : STATE[x.st]; if (!used.has(k)) used.set(k, colorOf(x)); }
+  $("legend").innerHTML = [...used].map(([k, c]) => `<span><i style="background:${c}"></i>${esc(k)}</span>`).join("") +
     (EVTS.some((e) => e.em === curAgent && OP_NAME[e.op]) ? `<span><i style="background:#fab005"></i>Pending</span><span><i style="background:#e03131"></i>Judge</span>` : "");
 }
 
@@ -973,7 +1068,7 @@ function caseSummary(rows) {
       if (lastRid === x.rid) {
         for (const p of pending) {
           if (p.st === "outside") { if (p.sec <= askMax) c.outside += p.sec; else c.askOver += p.sec; }
-          else if (p.st === "work" && EXTERNAL.has(p.cat)) c.ext += p.sec;
+          else if (p.st === "work" && ruleOf(p).read) c.ext += p.sec;   // 工作頁面（分類規則）＝外部查詢
           else if (p.st === "work") c.other += p.sec;
         }
       }
@@ -1044,7 +1139,7 @@ function docRows(rows) {
     m.set(x.doc, d);
   }
   return [...m.values()].sort((a, b) => b.sec - a.sec).map((d) => `<tr><td>${docLink({ ...d, gid: null })}</td>
-    <td><span class="badge" style="background:${COLOR[d.cat]}">${CAT[d.cat]}</span></td><td class="num">${dur(d.sec)}</td>
+    <td><span class="badge" style="background:${ruleOf(d).color}">${esc(ruleOf(d).name)}</span></td><td class="num">${dur(d.sec)}</td>
     <td class="num">${d.gids.size || ""}</td></tr>`).join("");
 }
 
@@ -1057,23 +1152,30 @@ function median(arr) {
 
 function renderCats(rows) {
   const m = {};
-  for (const x of rows) { const k = x.off ? "off" : x.st === "work" ? x.cat || "other" : x.st; m[k] = (m[k] || 0) + x.sec; }
+  // 依分類規則的「顯示名稱」彙總（工作中），其他狀態照舊
+  const meta = {};
+  for (const x of rows) {
+    const r = x.st === "work" && !x.off ? ruleOf(x) : null;
+    const k = x.off ? "off" : r ? "r:" + r.name : x.st;
+    m[k] = (m[k] || 0) + x.sec;
+    if (!meta[k]) meta[k] = r ? { name: r.name, color: r.color, l2: r.l2 } : { name: k === "off" ? "未上班（連續閒置）" : STATE[k], color: COLOR[k] };
+  }
   const total = Object.values(m).reduce((a, b) => a + b, 0) || 1;
-  const body = Object.entries(m).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<tr><td><span class="badge" style="background:${COLOR[k]}">${CAT[k] || STATE[k] || "未上班（連續閒置）"}</span></td>
+  const body = Object.entries(m).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<tr><td><span class="badge" style="background:${meta[k].color}">${esc(meta[k].name)}</span>${meta[k].l2 && meta[k].l2 !== meta[k].name ? ` <small class="muted">${esc(meta[k].l2)}</small>` : ""}</td>
     <td class="num">${dur(v)}</td><td class="num">${((v / total) * 100).toFixed(1)}%</td>
-    <td style="width:45%"><div style="height:10px;border-radius:3px;background:${COLOR[k]};width:${(v / total) * 100}%"></div></td></tr>`).join("");
+    <td style="width:45%"><div style="height:10px;border-radius:3px;background:${meta[k].color};width:${(v / total) * 100}%"></div></td></tr>`).join("");
   const hm = {};
-  for (const x of rows) if (x.st === "work" && x.cat === "other") hm[x.host || "(未知)"] = (hm[x.host || "(未知)"] || 0) + x.sec;
+  for (const x of rows) if (x.st === "work" && ruleOf(x).fallback) hm[x.host || "(未知)"] = (hm[x.host || "(未知)"] || 0) + x.sec;
   const otherTotal = Object.values(hm).reduce((a, b) => a + b, 0) || 1;
   const hostBody = Object.entries(hm).sort((a, b) => b[1] - a[1]).map(([h, v]) => `<tr><td>${esc(h)}</td><td class="num">${dur(v)}</td>
     <td class="num">${((v / otherTotal) * 100).toFixed(1)}%</td></tr>`).join("");
   const onT = total - (m.off || 0) || 1;   // 摘要的占比不含未上班
-  setSum("me.cats", Object.entries(m).filter(([k]) => k !== "off" && k !== "idle").sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${CAT[k] || STATE[k]} ${((v / onT) * 100).toFixed(0)}%`).join("・"));
+  setSum("me.cats", Object.entries(m).filter(([k]) => k !== "off" && k !== "idle").sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${meta[k].name} ${((v / onT) * 100).toFixed(0)}%`).join("・"));
   $("tabCats").innerHTML = table(["系統／狀態", "時間", "占比", ""], null, body) +
     `<h2 style="margin:18px 0 8px;font-size:14px">Google 文件明細（依文件）</h2>` +
     table(["文件", "類型", "時間", "工作表數"], null, docRows(rows) || "<tr><td colspan='4' class='muted'>沒有 Google 文件紀錄</td></tr>") +
-    `<h2 style="margin:18px 0 8px;font-size:14px">其他網站明細（依網域）</h2>` +
-    table(["網域", "時間", "占其他網站比例"], null, hostBody || "<tr><td colspan='3' class='muted'>沒有其他網站紀錄</td></tr>");
+    `<h2 style="margin:18px 0 8px;font-size:14px">未分類網站明細（依網域）</h2><p class="muted" style="margin:0 0 6px">沒有被任何分類規則比對到的網站；常出現的可以加進分類對照表。</p>` +
+    table(["網域", "時間", "占比"], null, hostBody || "<tr><td colspan='3' class='muted'>沒有未分類的網站</td></tr>");
 }
 
 function table(heads, keys, body) {
@@ -1294,7 +1396,7 @@ showTop(store("rrhViewerTab") === "usage" ? "usage" : "act");
 $("csvBtn").onclick = () => {
   const head = ["專員", "日期", "開始", "結束", "秒數", "狀態", "系統", "RID", "網域", "文件標題", "文件ID", "工作表", "開啟案件頁數", "裝置", "版本"];
   const lines = [head.join(",")].concat(view.map((x) => [x.em, x.date, fmtTime(x.s), fmtTime(x.e), x.sec, STATE[x.st] || x.st,
-    x.cat ? CAT[x.cat] || x.cat : "", x.rid ? `'${x.rid}` : "", x.host || "", x.title || "", x.doc || "", x.gid || "", x.tabs ?? "", x.dev, x.ver].map(csvCell).join(",")));
+    x.st === "work" || x.cat ? ruleOf(x).name : "", x.rid ? `'${x.rid}` : "", x.host || "", x.title || "", x.doc || "", x.gid || "", x.tabs ?? "", x.dev, x.ver].map(csvCell).join(",")));
   const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
@@ -1320,6 +1422,7 @@ const CFG = {
   summaryFile: "rrh_summary.json.gz", // 排程產生：每人每天的彙總
   usageFile: "rrh_usage.json.gz",     // 排程產生：功能使用
   casesFile: "rrh_cases.json.gz",     // 排程產生：依案件（按「載入案件資料」才下載）
+  catFile: "rrh_category.csv",   // 分類對照表：排程讀它分類；直接讀 .db 時報表也會自動載入
   orgFile: "rrh_org.csv",   // 單位對照表（email, L1, L2），放在同一個 Drive 帳號底下就會自動載入
   sqlJs: "https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/",
 };
@@ -1391,6 +1494,12 @@ $("gLoad").onclick = async () => {
 };
 
 /** 備用：直接下載整個 .db（檔案很大，只載入最近 N 天） */
+async function loadRulesFromDrive() {   // 直接讀 .db 時：Drive 上有分類對照表就用（Drive 按日模式改用彙總檔裡的規則）
+  try {
+    const o = await driveFind(CFG.catFile);
+    if (o) setRules(parseRules(await (await gfetch(`https://www.googleapis.com/drive/v3/files/${o.id}?alt=media&supportsAllDrives=true`)).text()), `Drive 上的 ${CFG.catFile}`);
+  } catch (_) {}
+}
 async function driveLoadDb(id) {
   let note = "";
   if (!id) {
@@ -1401,6 +1510,7 @@ async function driveLoadDb(id) {
   setMsg("下載資料庫…");
   const buf = await (await gfetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media&supportsAllDrives=true`)).arrayBuffer();
   leaveDayMode();
+  await loadRulesFromDrive();
   await loadDbBuffer(buf, Number($("days").value) || 7, note);
 }
 
@@ -1432,6 +1542,11 @@ async function driveJson(name) {
 // ----- Drive 按日模式：彙總檔（所有日期）＋ 每日原始檔（點到哪天才下載，最多暫存 4 天）-----
 async function enterDayMode(sum, meta) {
   SUMMARY = sum; DAY = { cache: new Map(), cur: null };
+  // 分類規則：用排程算彙總時的同一份（彙總檔裡有）；舊版彙總檔沒有就用內建規則，並把舊欄位轉成 L2 群組
+  if (sum.rules && sum.rules.length) setRules(sum.rules.map((r) => ({ ...r, read: !!r.read })), `Drive 上的 ${sum.rules_src || CFG.catFile}`);
+  else setRules(null);
+  const OLD = { wc: "DMS 案件頁", wi: "內部與查詢系統", wg: "Google 文件", wh: "聊天", wa: "外部 AI", wo: "其他網站" };
+  for (const r of sum.rows) if (!r.w) r.w = Object.fromEntries(Object.entries(OLD).filter(([k]) => r[k]).map(([k, g]) => [g, r[k]]));
   ALL = []; EVTS = [];
   buildFilters();
   const dates = teamDates();
@@ -1444,6 +1559,7 @@ async function enterDayMode(sum, meta) {
 function leaveDayMode() {
   if (!DAY) return;
   SUMMARY = null; DAY = null; CASES = null;
+  try { const saved = store("rrhRules"); setRules(saved ? parseRules(saved) : null, "畫面匯入的分類對照表"); } catch (_) { setRules(null); }
   caseTabState();
 }
 async function showDay(date) {
@@ -1621,16 +1737,16 @@ function renderCaseAttrs(list) {
 let TEAM_CACHE = { key: "", rows: [] };
 function teamRows() {
   if (DAY && SUMMARY) return SUMMARY.rows;
-  const key = ALL.length + "|" + (ALL[0] ? ALL[0].s : 0) + "|" + $("fOffH").value + "|" + $("fAskMax").value + "|" + EVTS.length;
+  const key = ALL.length + "|" + (ALL[0] ? ALL[0].s : 0) + "|" + $("fOffH").value + "|" + $("fAskMax").value + "|" + EVTS.length + "|" + RULE_SRC + RULES.length;
   if (TEAM_CACHE.key === key) return TEAM_CACHE.rows;
   const by = new Map();
   for (const x of ALL) { const k = x.em + "|" + x.date; if (!by.has(k)) by.set(k, []); by.get(k).push(x); }
   const rnd = Math.round, rows = [];
   for (const rs of by.values()) {
-    const v = levelStats(rs), on = rs.filter((x) => !x.off);
+    const v = levelStats(rs), on = rs.filter((x) => x.st !== "idle");   // 上班＝第一筆非閒置
     const cs = caseSummary(mergeAdjacent(rs)), tracked = cs.some((c) => c.tracked), judged = cs.filter((c) => c.status === "judge");
     const r = { em: rs[0].em, d: rs[0].date, T: rnd(v.span - v.off), work: rnd(v.work), out: rnd(v.outside), idle: rnd(v.idle), gap: rnd(v.gap), off: rnd(v.off),
-      wc: rnd(v.w.case), wi: rnd(v.w.int), wg: rnd(v.w.gdoc), wh: rnd(v.w.chat), wa: rnd(v.w.ai), wo: rnd(v.w.other), ip: rnd(v.i.page), ia: rnd(v.i.away), il: rnd(v.i.lock),
+      w: Object.fromEntries(Object.entries(v.w).map(([g, t]) => [g, rnd(t)])), ip: rnd(v.i.page), ia: rnd(v.i.away), il: rnd(v.i.lock),
       rids: new Set(rs.filter((x) => x.st === "work" && x.rid && !x.off).map((x) => x.rid)).size, n: cs.length,
       on: on.length ? fmtTime(Math.min(...on.map((x) => x.s))).slice(0, 5) : "" };
     if (tracked) Object.assign(r, { tr: 1, j: judged.length, p: cs.filter((c) => c.status === "pending").length, pk: cs.filter((c) => c.status === "peek").length,
@@ -1668,7 +1784,9 @@ function teamStats() {
   return [...by.entries()].map(([em, rs]) => {
     const n = rs.length, tr = rs.filter((r) => r.tr), a = (k) => sum(rs, k) / n, at = (k) => (tr.length ? sum(tr, k) / tr.length : null);
     const rids = sum(rs, "rids");
-    return { em, days: n, T: a("T"), work: a("work"), wc: a("wc"), wi: a("wi"), wg: a("wg"), wh: a("wh"), wa: a("wa"), wo: a("wo"), out: a("out"), idle: a("idle"), gap: a("gap"),
+    const wavg = {};
+    for (const r of rs) for (const [g, t] of Object.entries(r.w || {})) wavg["w:" + g] = (wavg["w:" + g] || 0) + t / n;
+    return { em, days: n, T: a("T"), work: a("work"), ...wavg, out: a("out"), idle: a("idle"), gap: a("gap"),
       rids: rids / n, per: rids ? sum(rs, "work") / rids : null, j: at("j"), p: at("p"), pk: at("pk"),
       jm: tr.length ? median(tr.filter((r) => r.j).map((r) => r.jm)) || null : null, on: median(rs.map((r) => r.on).filter(Boolean).map((t) => +t.slice(0, 2) * 60 + +t.slice(3))) };
   }).sort((a, b) => a.em.localeCompare(b.em));
@@ -1687,7 +1805,7 @@ function renderPeriod(stats, lbl, rng) {
   const hm = (m) => (m ? `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(Math.round(m % 60)).padStart(2, "0")}` : "-");
   const cols = [
     ["days", "天數", (v) => v, null], ["on", "上班（中位數）", hm, null], ["T", "在線", dd, null], ["work", "工作中", dd, null],
-    ["wc", "DMS 案件頁", dd, null], ["wi", "內部查詢", dd, null], ["wg", "Google 文件", dd, null], ["wh", "聊天", dd, null], ["wa", "外部 AI", dd, null], ["wo", "其他網站", dd, "high"],
+    ...l2List().filter((g) => stats.some((a) => a["w:" + g])).map((g) => ["w:" + g, g, dd, l2Read(g) ? null : "high"]),
     ["out", "Chrome 外", dd, "high"], ["idle", "閒置", dd, "high"],
     ["rids", "案件數", n1, "low"], ["per", "每件平均工作時間", dd, "high"], ["j", "Judge", n1, "low"], ["p", "Pending", n1, null], ["pk", "只看過", n1, null], ["jm", "Judge 件處理時間", dd, "high"],
   ];
@@ -1708,25 +1826,26 @@ function renderPeriod(stats, lbl, rng) {
 }
 
 /** 群體時間分布：每人一條堆疊色條（占在線時間），最上面是群體中位數；某一類 ≥ 群體中位數 1.5 倍（且多 3 個百分點以上）就標出來 */
-const DIST_PARTS = [["wc", "DMS 案件頁", "dms_case"], ["wi", "內部查詢", "dms_other"], ["wg", "Google 文件", "g_sheet"], ["wh", "聊天", "chat"], ["wa", "外部 AI", "ai"],
-  ["wo", "其他網站", "other"], ["out", "Chrome 外", "outside"], ["idle", "閒置", "idle"], ["gap", "沒有紀錄", null]];
-const FLAG_PARTS = new Set(["wo", "wa", "out", "idle", "gap"]);
+/** 色條的組成：各 L2 群組（依分類規則）＋ Chrome 外、閒置、沒有紀錄；[鍵, 名稱, 顏色, 會不會標「偏高」] */
+const distParts = (stats) => [
+  ...l2List().filter((g) => stats.some((a) => a["w:" + g])).map((g) => ["w:" + g, g, l2Color(g), !l2Read(g) && g !== "DMS 案件頁"]),
+  ["out", "Chrome 外", "var(--outside)", true], ["idle", "閒置", "var(--idle)", true], ["gap", "沒有紀錄", "var(--nr)", true]];
 const FLAG_MIN_PP = 0.05;   // 除了 1.5 倍，還要多 5 個百分點才標，避免小比例的雜訊
 function renderGrpDist(stats, lbl, rng) {
-  const color = (k) => (k ? COLOR[k] : "var(--nr)");
+  const DIST_PARTS = distParts(stats);
   const frac = (a) => Object.fromEntries(DIST_PARTS.map(([k]) => [k, a.T > 0 ? (a[k] || 0) / a.T : 0]));
   const F = stats.map((a) => ({ a, f: frac(a) })).sort((x, y) => (y.a.work / (y.a.T || 1)) - (x.a.work / (x.a.T || 1)));
   const gm = Object.fromEntries(DIST_PARTS.map(([k]) => [k, median(F.map((x) => x.f[k]))]));
   const tot = Object.values(gm).reduce((p, v) => p + v, 0) || 1;
-  const bar = (f, norm = 1) => `<div class="bar">${DIST_PARTS.map(([k, n, c]) => f[k] > 0 ? `<div title="${n} ${(f[k] * 100).toFixed(1)}%" style="width:${(f[k] / norm) * 100}%;background:${color(c)}"></div>` : "").join("")}</div>`;
-  const flags = (f) => DIST_PARTS.filter(([k]) => FLAG_PARTS.has(k) && gm[k] > 0 && f[k] >= gm[k] * 1.5 && f[k] - gm[k] >= FLAG_MIN_PP).map(([, n]) => `${n} 偏高`).join("、");
-  const legend = `<div class="legend" style="margin:0 0 8px">${DIST_PARTS.map(([, n, c]) => `<span><i style="background:${color(c)}"></i>${n}</span>`).join("")}</div>`;
+  const bar = (f, norm = 1) => `<div class="bar">${DIST_PARTS.map(([k, n, c]) => f[k] > 0 ? `<div title="${esc(n)} ${(f[k] * 100).toFixed(1)}%" style="width:${(f[k] / norm) * 100}%;background:${c}"></div>` : "").join("")}</div>`;
+  const flags = (f) => DIST_PARTS.filter(([k, , , fl]) => fl && gm[k] > 0 && f[k] >= gm[k] * 1.5 && f[k] - gm[k] >= FLAG_MIN_PP).map(([, n]) => `${esc(n)} 偏高`).join("、");
+  const legend = `<div class="legend" style="margin:0 0 8px">${DIST_PARTS.map(([, n, c]) => `<span><i style="background:${c}"></i>${esc(n)}</span>`).join("")}</div>`;
   const rows = F.map(({ a, f }) => { const fl = flags(f);
     return `<div class="gd${a.em === curAgent ? " me" : ""}"><span><a href="#" data-em="${esc(a.em)}">${esc(shortEm(a.em))}</a>${fl ? `<span class="flag">${fl}</span>` : ""}</span>${bar(f)}<span class="num">${dur(a.T)}</span></div>`; }).join("");
   setSum("team.dist", `${lbl || "全部專員"}・${rng}・依「工作中」比例由高到低`);
   $("grpDist").innerHTML = !F.length ? `<p class="muted">這個期間沒有資料</p>` : legend +
     `<div class="gd grp"><span>群體中位數（${F.length} 位）</span>${bar(gm, tot)}<span class="num">${dur(median(F.map((x) => x.a.T)))}</span></div><div class="gdhr"></div>` + rows +
-    `<p class="muted" style="margin:10px 0 0;font-size:12px">色條＝占在線時間的比例，右邊是日均在線時數。Chrome 外、閒置、其他網站、外部 AI、沒有紀錄比群體中位數高 1.5 倍以上（且多 5 個百分點）會標註。滑鼠移到色塊看百分比，點名字 → 個人分頁。</p>`;
+    `<p class="muted" style="margin:10px 0 0;font-size:12px">色條＝占在線時間的比例，右邊是日均在線時數。非工作頁面的群組（例如其他網站、外部 AI）、Chrome 外、閒置、沒有紀錄比群體中位數高 1.5 倍以上（且多 5 個百分點）會標註。滑鼠移到色塊看百分比，點名字 → 個人分頁。</p>`;
   bindAgentLinks($("grpDist"));
 }
 function bindAgentLinks(root) {
