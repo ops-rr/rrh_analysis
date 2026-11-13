@@ -85,6 +85,7 @@ details.more summary::before{content:"▸ "}details.more[open] summary::before{c
 .sec.closed .sb{display:none}
 .resetrow{text-align:right;margin:-2px 0 12px}
 button.link{border:none;background:none;color:var(--muted);font-size:13px}
+#gRefresh.new{background:#f08c00;border-color:#f08c00;color:#fff;font-weight:600}
 .gd{display:grid;grid-template-columns:minmax(150px,240px) 1fr 64px;gap:10px;align-items:center;margin:4px 0;font-size:13px}
 .gd .bar{display:flex;height:18px;border-radius:4px;overflow:hidden;background:var(--line)}
 .gd .bar div{height:100%}.gd .flag{color:#ff6b6b;font-size:12px;margin-left:6px}
@@ -155,6 +156,8 @@ tr.me td{background:rgba(79,142,247,.14)}
     <input id="gClient" size="40" placeholder="OAuth Client ID（xxx.apps.googleusercontent.com）">
     <input id="gFile" size="30" placeholder="（選填）.db 檔案連結或 ID：直接讀完整資料庫">
     <button class="primary" id="gLoad">登入 Google 並載入</button>
+    <button id="gRefresh" class="hide" title="檢查 Drive 上有沒有排程產生的新資料；有才下載，畫面上的選擇都會保留">↻ 更新資料</button>
+    <span id="gStamp" class="muted"></span>
     <span id="gWho" class="muted"></span>
   </div>
   <div class="row srcbar hide" id="fbBar">
@@ -1540,8 +1543,72 @@ async function driveJson(name) {
 }
 
 // ----- Drive 按日模式：彙總檔（所有日期）＋ 每日原始檔（點到哪天才下載，最多暫存 4 天）-----
+let SUMMARY_META = null, REFRESH_TIMER = null;
+
+/** 按鈕旁顯示排程更新時間；hasNew＝Drive 上已經有更新的彙總檔 */
+function showStamp(hasNew) {
+  const t = (SUMMARY && SUMMARY.generated_at) || "";
+  $("gRefresh").classList.remove("hide");
+  $("gRefresh").classList.toggle("new", !!hasNew);
+  $("gRefresh").textContent = hasNew ? "↻ 有新資料，點此更新" : "↻ 更新資料";
+  $("gStamp").textContent = t ? `排程更新於 ${t.slice(5, 16)}` : "";
+  if (!REFRESH_TIMER) REFRESH_TIMER = setInterval(checkNewData, 10 * 60e3);
+}
+/** 每 10 分鐘看一次 Drive 上彙總檔的修改時間（不下載）；登入過期就略過，不會自動跳登入視窗 */
+async function checkNewData() {
+  if (!DAY || !SUMMARY_META || !(gToken && Date.now() < gExp)) return;
+  try { const f = await driveFind(CFG.summaryFile); if (f && f.modifiedTime !== SUMMARY_META.modifiedTime) showStamp(true); } catch (_) {}
+}
+/** 更新資料：Drive 上的彙總檔有變才重新下載；目前的分頁、專員、日期、篩選都保留 */
+async function refreshData() {
+  const btn = $("gRefresh");
+  btn.disabled = true;
+  try {
+    setMsg("檢查有沒有新資料…");
+    const f = await driveFind(CFG.summaryFile);   // 憑證過期時這裡會跳一次 Google 登入
+    if (!f) { setMsg(`Drive 裡找不到 ${CFG.summaryFile}`); return; }
+    if (SUMMARY_META && f.modifiedTime === SUMMARY_META.modifiedTime) { showStamp(false); setMsg(`已是最新資料（排程更新於 ${SUMMARY.generated_at}）`); return; }
+    // 記下目前的選擇
+    const keep = { agent: curAgent, date: $("fDate").value, pFrom: $("pFrom").value, pTo: $("pTo").value,
+      pToWasLast: $("pTo").value === teamDates().at(-1), dateWasLast: $("fDate").selectedIndex === 0,
+      cases: CASES ? Object.fromEntries(["cFrom", "cTo", "cStatus", "cRR", "cAmt", "cN", "cRid", "cAgent", "aBy"].map((id) => [id, $(id).value])) : null,
+      cToWasLast: CASES ? $("cTo").selectedIndex === $("cTo").options.length - 1 : false };
+    setMsg("下載新的彙總檔…");
+    const sum = await driveJson(CFG.summaryFile);
+    if (!sum) return;
+    driveJson(CFG.usageFile).then((u) => u && loadUsage(u.data.rows.map((r) => Object.fromEntries(u.data.cols.map((c, i) => [c, r[i]]))))).catch(() => {});
+    SUMMARY = sum.data; SUMMARY_META = sum.meta;
+    if (SUMMARY.rules && SUMMARY.rules.length) setRules(SUMMARY.rules.map((r) => ({ ...r, read: !!r.read })), `Drive 上的 ${SUMMARY.rules_src || CFG.catFile}`);
+    const OLD = { wc: "DMS 案件頁", wi: "內部與查詢系統", wg: "Google 文件", wh: "聊天", wa: "外部 AI", wo: "其他網站" };
+    for (const r of SUMMARY.rows) if (!r.w) r.w = Object.fromEntries(Object.entries(OLD).filter(([k]) => r[k]).map(([k, g]) => [g, r[k]]));
+    DAY.cache.clear(); TEAM_CACHE.key = "";
+    // 還原選擇：原本看最新一天／期間到最新一天的，延伸到新的最新一天
+    const dates = teamDates(), last = dates.at(-1);
+    fillTeamDates();
+    if (dates.includes(keep.pFrom)) $("pFrom").value = keep.pFrom;
+    $("pTo").value = keep.pToWasLast || !dates.includes(keep.pTo) ? last : keep.pTo;
+    AGENTS = [...new Set(SUMMARY.rows.map((r) => r.em))].sort();
+    orgRefresh();
+    curAgent = AGENTS.includes(keep.agent) ? keep.agent : curAgent;
+    PREF_DATE = keep.dateWasLast ? null : keep.date;
+    fillDates(); fillCmp();
+    if (keep.dateWasLast) $("fDate").selectedIndex = 0;
+    if (keep.cases) {   // 案件資料已經載入過：一起更新，篩選照舊
+      await $("casesLoad").onclick();
+      for (const [id, v] of Object.entries(keep.cases)) if ([...($(id).options || [])].some((o) => o.value === v) || !$(id).options) $(id).value = v;
+      if (keep.cToWasLast) $("cTo").selectedIndex = $("cTo").options.length - 1;
+      renderCases2();
+    }
+    showStamp(false);
+    await showDay($("fDate").value);
+    setMsg(`已更新（排程更新於 ${SUMMARY.generated_at}）`);
+  } catch (e) { setMsg("更新失敗：" + e.message); }
+  finally { btn.disabled = false; }
+}
+$("gRefresh").onclick = refreshData;
 async function enterDayMode(sum, meta) {
-  SUMMARY = sum; DAY = { cache: new Map(), cur: null };
+  SUMMARY = sum; SUMMARY_META = meta; DAY = { cache: new Map(), cur: null };
+  showStamp(false);
   // 分類規則：用排程算彙總時的同一份（彙總檔裡有）；舊版彙總檔沒有就用內建規則，並把舊欄位轉成 L2 群組
   if (sum.rules && sum.rules.length) setRules(sum.rules.map((r) => ({ ...r, read: !!r.read })), `Drive 上的 ${sum.rules_src || CFG.catFile}`);
   else setRules(null);
@@ -1557,6 +1624,7 @@ async function enterDayMode(sum, meta) {
   await showDay($("fDate").value);
 }
 function leaveDayMode() {
+  $("gRefresh").classList.add("hide"); $("gStamp").textContent = ""; clearInterval(REFRESH_TIMER); REFRESH_TIMER = null;
   if (!DAY) return;
   SUMMARY = null; DAY = null; CASES = null;
   try { const saved = store("rrhRules"); setRules(saved ? parseRules(saved) : null, "畫面匯入的分類對照表"); } catch (_) { setRules(null); }
