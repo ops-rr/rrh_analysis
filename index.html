@@ -58,6 +58,15 @@ tr.open td{background:rgba(79,142,247,.10)}
 .rbody{margin:6px 0 4px 24px;padding:8px 12px;border-radius:8px;background:rgba(127,127,127,.07)}
 .rstep{display:grid;grid-template-columns:64px minmax(0,1fr) minmax(0,1fr);gap:8px;font-size:12px;padding:2px 0}
 .rstep.end{border-top:1px solid var(--line);margin-top:4px;padding-top:5px}
+.rtitle{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (max-width:760px){
+  .rhead{grid-template-columns:14px auto 26px 44px 1fr;row-gap:2px}
+  .rhead .rtitle{grid-column:2 / -1;grid-row:2;white-space:normal}
+  .rhead .rsteps{grid-column:5;grid-row:1}
+  .rbody{margin-left:4px;padding:8px}
+  .rstep{grid-template-columns:58px minmax(0,1fr)}
+  .rstep>span:nth-child(3){grid-column:2}
+}
 mark{background:rgba(250,176,5,.35);color:inherit;border-radius:2px;padding:0 1px}
 .strip{position:relative;height:34px;border-radius:6px;background:var(--line);overflow:hidden;margin:4px 0 2px}
 .strip div{position:absolute;top:0;bottom:0}
@@ -1829,7 +1838,7 @@ function renderRoutes() {
     }
     return `<div class="rrow"><div class="rhead" data-rid="${c.rid}"><span class="muted">${open ? "▾" : "▸"}</span>`
       + `<a href="${dmsCaseUrl(c.rid)}" target="_blank" rel="noopener">${hl(c.rid, q)}</a><button class="rcopy" data-copy="${c.rid}" title="複製 RID">⧉</button><span class="muted">${c.date.slice(5)}</span>`
-      + `<span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${head}</span><span class="muted" style="text-align:right">${c.steps.length} 步</span></div>${body}</div>`;
+      + `<span class="rtitle">${head}</span><span class="muted rsteps" style="text-align:right">${c.steps.length} 步</span></div>${body}</div>`;
   });
   $("routes").innerHTML = rows.join("") + (list.length > ROUTE_MAX ? `<p class="muted">只顯示前 ${ROUTE_MAX} 件，請用搜尋或篩選縮小範圍（匯出 CSV 會包含全部 ${list.length} 件）</p>` : "");
   $("routes").querySelectorAll(".rhead").forEach((el) => (el.onclick = (e) => {
