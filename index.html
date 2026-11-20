@@ -50,9 +50,11 @@ tr.open td{background:rgba(79,142,247,.10)}
 .badge{display:inline-block;border-radius:4px;padding:0 6px;color:#fff;font-size:12px}
 .tablewrap{max-height:560px;overflow:auto}
 .rchip{display:inline-block;font-size:12px;border:1px solid var(--line);border-radius:12px;padding:1px 9px;margin:0 6px 6px 0;cursor:pointer}
+.rcopy{border:none;background:none;padding:0 4px;color:var(--muted);font-size:13px;line-height:1}
+.rcopy:hover{color:var(--accent)}
 .rchip.on{background:var(--accent);border-color:var(--accent);color:#fff}
 .rrow{border-bottom:1px solid var(--line);padding:6px 0;font-size:13px}
-.rhead{display:grid;grid-template-columns:16px 140px 50px minmax(0,1fr) 60px;gap:8px;align-items:center;cursor:pointer}
+.rhead{display:grid;grid-template-columns:16px 130px 26px 50px minmax(0,1fr) 60px;gap:8px;align-items:center;cursor:pointer}
 .rbody{margin:6px 0 4px 24px;padding:8px 12px;border-radius:8px;background:rgba(127,127,127,.07)}
 .rstep{display:grid;grid-template-columns:64px minmax(0,1fr) minmax(0,1fr);gap:8px;font-size:12px;padding:2px 0}
 .rstep.end{border-top:1px solid var(--line);margin-top:4px;padding-top:5px}
@@ -1826,13 +1828,21 @@ function renderRoutes() {
       body = `<div class="rbody">${attrs ? `<div class="muted" style="font-size:12px;margin-bottom:6px">${attrs}</div>` : ""}${lines.join("")}</div>`;
     }
     return `<div class="rrow"><div class="rhead" data-rid="${c.rid}"><span class="muted">${open ? "▾" : "▸"}</span>`
-      + `<a href="${dmsCaseUrl(c.rid)}" target="_blank" rel="noopener">${hl(c.rid, q)}</a><span class="muted">${c.date.slice(5)}</span>`
+      + `<a href="${dmsCaseUrl(c.rid)}" target="_blank" rel="noopener">${hl(c.rid, q)}</a><button class="rcopy" data-copy="${c.rid}" title="複製 RID">⧉</button><span class="muted">${c.date.slice(5)}</span>`
       + `<span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${head}</span><span class="muted" style="text-align:right">${c.steps.length} 步</span></div>${body}</div>`;
   });
   $("routes").innerHTML = rows.join("") + (list.length > ROUTE_MAX ? `<p class="muted">只顯示前 ${ROUTE_MAX} 件，請用搜尋或篩選縮小範圍（匯出 CSV 會包含全部 ${list.length} 件）</p>` : "");
   $("routes").querySelectorAll(".rhead").forEach((el) => (el.onclick = (e) => {
-    if (e.target.closest("a")) return;
+    if (e.target.closest("a, .rcopy")) return;
     const rid = el.dataset.rid; routeOpen.has(rid) ? routeOpen.delete(rid) : routeOpen.add(rid); renderRoutes();
+  }));
+  // 複製 RID：只複製號碼，按完顯示 ✓
+  $("routes").querySelectorAll(".rcopy").forEach((el) => (el.onclick = async (e) => {
+    e.stopPropagation();
+    try { await navigator.clipboard.writeText(el.dataset.copy); } catch (_) {
+      const t = document.createElement("textarea"); t.value = el.dataset.copy; document.body.appendChild(t); t.select(); document.execCommand("copy"); t.remove();
+    }
+    el.textContent = "✓"; setTimeout(() => (el.textContent = "⧉"), 1200);
   }));
   $("routes").querySelectorAll("[data-all]").forEach((el) => (el.onclick = (e) => { e.stopPropagation(); routeAll.add(el.dataset.all); renderRoutes(); }));
 }
