@@ -49,6 +49,13 @@ tr.open td{background:rgba(79,142,247,.10)}
 .st-judge{color:#e03131;font-weight:700}.st-pending{color:#f08c00;font-weight:700}.st-peek{color:var(--muted)}
 .badge{display:inline-block;border-radius:4px;padding:0 6px;color:#fff;font-size:12px}
 .tablewrap{max-height:560px;overflow:auto}
+.rchip{display:inline-block;font-size:12px;border:1px solid var(--line);border-radius:12px;padding:1px 9px;margin:0 6px 6px 0;cursor:pointer}
+.rrow{border-bottom:1px solid var(--line);padding:6px 0;font-size:13px}
+.rhead{display:grid;grid-template-columns:16px 140px 50px minmax(0,1fr) 60px;gap:8px;align-items:center;cursor:pointer}
+.rbody{margin:6px 0 4px 24px;padding:8px 12px;border-radius:8px;background:rgba(127,127,127,.07)}
+.rstep{display:grid;grid-template-columns:64px minmax(0,1fr) minmax(0,1fr);gap:8px;font-size:12px;padding:2px 0}
+.rstep.end{border-top:1px solid var(--line);margin-top:4px;padding-top:5px}
+mark{background:rgba(250,176,5,.35);color:inherit;border-radius:2px;padding:0 1px}
 .strip{position:relative;height:34px;border-radius:6px;background:var(--line);overflow:hidden;margin:4px 0 2px}
 .strip div{position:absolute;top:0;bottom:0}
 .axis{position:relative;height:16px;font-size:11px;color:var(--muted)}
@@ -307,6 +314,25 @@ tr.me td{background:rgba(79,142,247,.14)}
         </details>
       </div>
       <div class="secs" data-panel="case">
+    <section class="sec" data-sec="case.routes">
+      <div class="sh"><span class="tw">▾</span><b>SOP 路線</b><small class="ssum" id="sum_case_routes"></small><span class="ctl"><button data-mv="-1" title="上移">↑</button><button data-mv="1" title="下移">↓</button></span></div>
+      <div class="sb">
+        <div class="row" style="margin-bottom:6px">
+          <input id="rQ" style="flex:1;min-width:260px" placeholder="搜尋 RID、節點、選項、結案節點、Template、判決原因">
+          <button id="rCsv">匯出 CSV</button>
+        </div>
+        <p class="muted" style="margin:0 0 8px;font-size:12px">多個關鍵字用空白分開＝全部都要符合。只有送出內容有被抽樣記錄的案件才有路線與 Template（設定在 MyPage 的 rr_capture_config.json）。不受上方篩選影響。</p>
+        <div class="row" style="margin-bottom:8px">
+          <label>SOP 流程 <select id="rFlow"></select></label>
+          <label>Template <select id="rTpl" style="max-width:260px"></select></label>
+          <label>判決原因 <select id="rReason" style="max-width:220px"></select></label>
+          <label>爭議原因 <select id="rDR" style="max-width:220px"></select></label>
+          <label>狀態 <select id="rSt"><option value="">全部</option><option value="judge">已 Judge</option><option value="open">未 Judge</option></select></label>
+        </div>
+        <div id="rChips"></div>
+        <div class="tablewrap" id="routes"></div>
+      </div>
+    </section>
     <section class="sec" data-sec="case.list">
       <div class="sh"><span class="tw">▾</span><b>案件歷程</b><small class="ssum" id="sum_case_list"></small><span class="ctl"><button data-mv="-1" title="上移">↑</button><button data-mv="1" title="下移">↓</button></span></div>
       <div class="sb">
@@ -1425,6 +1451,7 @@ const CFG = {
   summaryFile: "rrh_summary.json.gz", // 排程產生：每人每天的彙總
   usageFile: "rrh_usage.json.gz",     // 排程產生：功能使用
   casesFile: "rrh_cases.json.gz",     // 排程產生：依案件（按「載入案件資料」才下載）
+  routesFile: "rrh_routes.json.gz",   // 排程產生：SOP 路線（跟案件資料一起下載）
   catFile: "rrh_category.csv",   // 分類對照表：排程讀它分類；直接讀 .db 時報表也會自動載入
   orgFile: "rrh_org.csv",   // 單位對照表（email, L1, L2），放在同一個 Drive 帳號底下就會自動載入
   sqlJs: "https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/",
@@ -1626,7 +1653,7 @@ async function enterDayMode(sum, meta) {
 function leaveDayMode() {
   $("gRefresh").classList.add("hide"); $("gStamp").textContent = ""; clearInterval(REFRESH_TIMER); REFRESH_TIMER = null;
   if (!DAY) return;
-  SUMMARY = null; DAY = null; CASES = null;
+  SUMMARY = null; DAY = null; CASES = null; ROUTES = null;
   try { const saved = store("rrhRules"); setRules(saved ? parseRules(saved) : null, "畫面匯入的分類對照表"); } catch (_) { setRules(null); }
   caseTabState();
 }
@@ -1713,7 +1740,112 @@ $("casesLoad").onclick = async () => {
     fillCaseAgents(); caseTabState();
     setMsg(`案件資料：${CASES.length} 件（${o.from} 起第一次被打開的案件）`);
     renderCases2();
+    await loadRoutes();
   } catch (e) { setMsg("案件資料讀取失敗：" + e.message); }
+};
+
+// ----- SOP 路線：排程產生的 rrh_routes.json.gz（sop/next 每一步＋Judge 結案資訊；不含專員） -----
+let ROUTES = null, routeOpen = new Set(), routeAll = new Set();
+const ROUTE_MAX = 200;   // 清單最多顯示幾件
+const dmsCaseUrl = (rid) => `https://dms.cs.shopee.tw/dispute/detail/${rid}`;
+
+async function loadRoutes() {
+  let r;
+  try { r = await driveJson(CFG.routesFile); } catch (e) { setMsg("SOP 路線讀取失敗：" + e.message); return; }
+  if (!r) { ROUTES = []; $("routes").innerHTML = `<p class="muted">Drive 上找不到 ${CFG.routesFile}（排程還沒更新到 2026-11-20 版？）</p>`; setSum("case.routes", ""); return; }
+  const o = r.data, S = o.strs, s = (i) => (i == null ? "" : S[i]);
+  ROUTES = o.cases.map(([rid, first, a, steps, pends, judge]) => {
+    const c = {
+      rid, first: (first || 0) * 1000, date: first ? fmtDate(first * 1000) : "", a: a || {},
+      steps: steps.map(([t, f, n, op]) => ({ t: t * 1000, flow: s(f), node: s(n), opt: s(op) })),
+      pends: pends.map(([t, reason, n, lb]) => ({ t: t * 1000, reason, node: s(n), name: s(lb) || reasonName(reason) })),
+      judge: judge ? { t: judge[0] * 1000, node: s(judge[1]), tpl: s(judge[2]), btpl: s(judge[3]), reason: s(judge[4]), amt: judge[5], ok: judge[6] !== 0 } : null,
+    };
+    c.flows = [...new Set(c.steps.map((x) => x.flow.split("_F")[0]).filter(Boolean))];
+    c.text = [rid, ...c.steps.flatMap((x) => [x.node, x.opt]), ...c.pends.map((x) => x.node + " " + x.name),
+      ...(c.judge ? [c.judge.node, c.judge.tpl, c.judge.btpl, c.judge.reason] : [])].join("\n").toLowerCase();
+    return c;
+  });
+  const keep = Object.fromEntries(["rFlow", "rTpl", "rReason", "rDR"].map((id) => [id, $(id).value]));
+  const opt = (v, t) => `<option value="${esc(v)}">${esc(t ?? v)}</option>`;
+  const vals = (f) => { const m = new Map(); for (const c of ROUTES) for (const v of f(c)) if (v !== "" && v != null) m.set(v, (m.get(v) || 0) + 1); return [...m].sort((x, y) => y[1] - x[1]); };
+  $("rFlow").innerHTML = opt("", "全部") + vals((c) => c.flows).sort((x, y) => (+x[0].slice(3) || 0) - (+y[0].slice(3) || 0)).map(([v, n]) => opt(v, `${v}（${n}）`)).join("");
+  $("rTpl").innerHTML = opt("", "全部") + vals((c) => (c.judge ? [c.judge.tpl] : [])).map(([v, n]) => opt(v, `${v}（${n}）`)).join("");
+  $("rReason").innerHTML = opt("", "全部") + vals((c) => (c.judge ? [c.judge.reason] : [])).map(([v, n]) => opt(v, `${v}（${n}）`)).join("");
+  $("rDR").innerHTML = opt("", "全部") + vals((c) => [c.a.dr]).map(([v, n]) => opt(v, `${codeLabel("dr", v)}（${n}）`)).join("");
+  for (const [id, v] of Object.entries(keep)) if ([...$(id).options].some((x) => x.value === v)) $(id).value = v;
+  for (const id of ["rQ", "rFlow", "rTpl", "rReason", "rDR", "rSt"]) $(id).oninput = $(id).onchange = renderRoutes;
+  renderRoutes();
+}
+
+function routeTokens() { return $("rQ").value.trim().toLowerCase().split(/\s+/).filter(Boolean); }
+function routeFiltered() {
+  const q = routeTokens(), flow = $("rFlow").value, tpl = $("rTpl").value, reason = $("rReason").value, dr = $("rDR").value, st = $("rSt").value;
+  return ROUTES.filter((c) => q.every((t) => c.text.includes(t)) && (!flow || c.flows.includes(flow))
+    && (!tpl || (c.judge && c.judge.tpl === tpl)) && (!reason || (c.judge && c.judge.reason === reason))
+    && (!dr || String(c.a.dr) === dr) && (!st || (st === "judge" ? !!c.judge : !c.judge)));
+}
+/** 關鍵字標黃 */
+function hl(text, q) {
+  let h = esc(text);
+  for (const t of q) h = h.replace(new RegExp(esc(t).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), (m) => `<mark>${m}</mark>`);
+  return h;
+}
+/** 一件案件的時間軸：每一步、Pending、Judge 依時間排 */
+function routeItems(c) {
+  const items = c.steps.map((x) => ({ t: x.t, a: x.node, b: "→ " + (x.opt || "（沒有選項文字）"), flow: x.flow.split("_F")[0] }));
+  for (const p of c.pends) items.push({ t: p.t, a: `Pending：${p.name}`, b: p.node ? `節點：${p.node}` : "", cls: "st-pending" });
+  if (c.judge) items.push({ t: c.judge.t, a: `Judge${c.judge.ok ? "" : "（送出後連線中斷，可能已判決）"}：${c.judge.node || "（沒有結案節點）"}`, b: `${c.judge.tpl || ""}${c.judge.amt != null ? "　退款 " + Math.round(c.judge.amt / 100000) : ""}`, cls: "st-judge", end: true });
+  return items.sort((x, y) => x.t - y.t);
+}
+
+function renderRoutes() {
+  if (!ROUTES) return;
+  const list = routeFiltered(), q = routeTokens();
+  setSum("case.routes", `${list.length} 件${list.length !== ROUTES.length ? `（共 ${ROUTES.length}）` : ""}`);
+  const cnt = new Map();
+  for (const c of list) if (c.judge && c.judge.tpl) cnt.set(c.judge.tpl, (cnt.get(c.judge.tpl) || 0) + 1);
+  const top = [...cnt].sort((x, y) => y[1] - x[1]).slice(0, 8);
+  $("rChips").innerHTML = top.length ? `<div class="muted" style="font-size:12px;margin-bottom:4px">常用 Template（點一下＝篩選）</div>`
+    + top.map(([t, n]) => `<span class="rchip" data-tpl="${esc(t)}"><b>${esc(t)}</b> ${n}</span>`).join("") : "";
+  $("rChips").querySelectorAll("[data-tpl]").forEach((el) => (el.onclick = () => { $("rTpl").value = el.dataset.tpl; renderRoutes(); }));
+  if (!list.length) { $("routes").innerHTML = `<p class="muted">沒有符合的案件</p>`; return; }
+  const rows = list.slice(0, ROUTE_MAX).map((c) => {
+    const open = routeOpen.has(c.rid);
+    const head = c.judge ? `<b>${hl(c.judge.node || c.judge.tpl || "Judge", q)}</b> <span class="muted">· ${hl(c.judge.reason, q)}</span>`
+      : c.pends.length ? `<span class="st-pending">Pending：${esc(c.pends.at(-1).name)}</span> <span class="muted">· 尚未 Judge</span>` : `<span class="muted">尚未 Judge</span>`;
+    let body = "";
+    if (open) {
+      const attrs = ["dr", "rr", "st", "amt", "lt"].filter((k) => c.a[k] != null).map((k) => `${CASE_ATTR[k][0]}：${esc(codeLabel(k, c.a[k]))}`).join("　·　");
+      let items = routeItems(c);
+      const fold = !q.length && !routeAll.has(c.rid) && items.length > 12;
+      const line = (x) => `<div class="rstep${x.end ? " end" : ""}"><span class="muted">${fmtTime(x.t)}</span><span class="${x.cls || ""}">${hl(x.a, q)}</span><span>${hl(x.b, q)}${x.flow ? ` <span class="muted">${esc(x.flow)}</span>` : ""}</span></div>`;
+      const lines = fold ? [...items.slice(0, 3).map(line), `<div class="rstep"><span></span><button class="link" data-all="${c.rid}">… 展開中間 ${items.length - 7} 步 …</button><span></span></div>`, ...items.slice(-4).map(line)] : items.map(line);
+      body = `<div class="rbody">${attrs ? `<div class="muted" style="font-size:12px;margin-bottom:6px">${attrs}</div>` : ""}${lines.join("")}</div>`;
+    }
+    return `<div class="rrow"><div class="rhead" data-rid="${c.rid}"><span class="muted">${open ? "▾" : "▸"}</span>`
+      + `<a href="${dmsCaseUrl(c.rid)}" target="_blank" rel="noopener">${hl(c.rid, q)}</a><span class="muted">${c.date.slice(5)}</span>`
+      + `<span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${head}</span><span class="muted" style="text-align:right">${c.steps.length} 步</span></div>${body}</div>`;
+  });
+  $("routes").innerHTML = rows.join("") + (list.length > ROUTE_MAX ? `<p class="muted">只顯示前 ${ROUTE_MAX} 件，請用搜尋或篩選縮小範圍（匯出 CSV 會包含全部 ${list.length} 件）</p>` : "");
+  $("routes").querySelectorAll(".rhead").forEach((el) => (el.onclick = (e) => {
+    if (e.target.closest("a")) return;
+    const rid = el.dataset.rid; routeOpen.has(rid) ? routeOpen.delete(rid) : routeOpen.add(rid); renderRoutes();
+  }));
+  $("routes").querySelectorAll("[data-all]").forEach((el) => (el.onclick = (e) => { e.stopPropagation(); routeAll.add(el.dataset.all); renderRoutes(); }));
+}
+
+$("rCsv").onclick = () => {
+  if (!ROUTES) return;
+  const cell = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const head = ["RID", "日期", "爭議原因", "退貨原因", "金額", "SOP 流程", "路線（節點→選項）", "Pending", "結案節點", "Template（賣家）", "Template（買家）", "判決原因", "退款金額"];
+  const lines = routeFiltered().map((c) => [c.rid, c.date, codeLabel("dr", c.a.dr), codeLabel("rr", c.a.rr), c.a.amt ?? "", c.flows.join(" "),
+    c.steps.map((x) => `${x.node}→${x.opt}`).join(" / "), c.pends.map((p) => p.name).join(" / "),
+    c.judge ? c.judge.node : "", c.judge ? c.judge.tpl : "", c.judge ? c.judge.btpl : "", c.judge ? c.judge.reason : "",
+    c.judge && c.judge.amt != null ? Math.round(c.judge.amt / 100000) : ""].map(cell).join(","));
+  const blob = new Blob(["\ufeff" + [head.map(cell).join(","), ...lines].join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `sop_routes_${fmtDate(Date.now())}.csv`; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 };
 
 function caseFiltered() {
